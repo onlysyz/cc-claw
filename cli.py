@@ -6,8 +6,9 @@ import asyncio
 import logging
 import sys
 import uuid
+import platform
 
-from client import ClientConfig, PairingInfo, CCClawDaemon
+from client import ClientConfig, PairingInfo, CCClawDaemon, APIClient
 
 
 logging.basicConfig(
@@ -36,8 +37,14 @@ def cmd_status(args):
     config = ClientConfig.load()
 
     print("=== CC-Claw Status ===")
-    print(f"Server: {config.server_ws_url}")
-    print(f"Device ID: {config.device_id or 'Not configured'}")
+    print(f"Server: {config.server_api_url}")
+
+    if not config.device_id:
+        print("\n❌ Not paired")
+        print("   Run 'cc-claw pair' to connect")
+        return
+
+    print(f"Device ID: {config.device_id}")
     print(f"Claude Path: {config.claude_path}")
 
     # Check Claude CLI
@@ -48,28 +55,94 @@ def cmd_status(args):
     else:
         print("Claude: Not found")
 
+    # Check server connection
+    if "example.com" not in config.server_api_url:
+        print("\n🔄 Checking server connection...")
+
+        async def check():
+            api = APIClient(config)
+            result = await api.get_pairing_status(0)  # Just test connectivity
+            return result is not None
+
+        try:
+            connected = asyncio.run(check())
+            if connected:
+                print("Server: ✅ Connected")
+            else:
+                print("Server: ⚠️  Could not connect")
+        except Exception as e:
+            print(f"Server: ❌ Connection failed ({e})")
+    else:
+        print("\n⚠️  Server not configured")
+
 
 def cmd_pair(args):
     """Start pairing process"""
-    print("=== CC-Claw Pairing ===")
+    print("=== CC-Claw Pairing ===\n")
 
-    # Generate a random device ID
-    device_id = str(uuid.uuid4())
-
-    # Load or create config
+    # Load config
     config = ClientConfig.load()
-    config.device_id = device_id
-    config.save()
 
-    # Load pairing info
-    pairing = PairingInfo()
+    # Check server URL
+    if "example.com" in config.server_api_url:
+        print("⚠️  Server URL not configured!")
+        print("   Run: cc-claw config --set server_api_url=https://your-server.com")
+        print("   Run: cc-claw config --set server_ws_url=wss://your-server.com")
+        return
 
-    print(f"Device ID: {device_id}")
-    print("\nPlease send /pair to the CC-Claw Telegram bot")
-    print("Then enter the pairing code shown by the bot:")
+    # Generate device ID and token
+    device_id = str(uuid.uuid4())
+    device_token = str(uuid.uuid4())
+    device_name = platform.node() or "My Device"
+    device_platform = platform.system().lower()
 
-    # For now, just save the device ID
-    print(f"\nConfiguration saved. Run 'cc-claw start' after pairing.")
+    print(f"Device Name: {device_name}")
+    print(f"Platform: {device_platform}")
+    print(f"\n📱 Please do the following:")
+    print("   1. Open Telegram and send /pair to the CC-Claw bot")
+    print("   2. The bot will give you a pairing code")
+    print("   3. Enter the code below:\n")
+
+    pairing_code = input("Enter pairing code: ").strip().upper()
+
+    if not pairing_code:
+        print("❌ Pairing cancelled")
+        return
+
+    if len(pairing_code) != 6:
+        print("❌ Invalid pairing code format")
+        return
+
+    print("\n🔄 Completing pairing...")
+
+    # Complete pairing via API
+    async def complete():
+        api = APIClient(config)
+        result = await api.complete_pairing(
+            code=pairing_code,
+            device_id=device_id,
+            device_name=device_name,
+            platform=device_platform,
+            token=device_token,
+        )
+        return result
+
+    result = asyncio.run(complete())
+
+    if result:
+        # Save config
+        config.device_id = device_id
+        config.device_token = device_token
+        config.save()
+
+        print("\n✅ Pairing completed successfully!")
+        print(f"   Device ID: {device_id}")
+        print("\n🚀 Run 'cc-claw start' to connect to server")
+    else:
+        print("\n❌ Pairing failed!")
+        print("   - Check if the code is correct")
+        print("   - Check if the code has expired (5 minutes)")
+        print("   - Make sure the server is running")
 
 
 def cmd_unpair(args):

@@ -7,6 +7,7 @@ from .websocket import WebSocketManager
 from .claude import ClaudeExecutor
 from .handler import MessageHandler, ToolExecutor
 from .daemon import CCClawDaemon
+from .api import APIClient
 
 __all__ = [
     "ClientConfig",
@@ -16,4 +17,5 @@ __all__ = [
     "MessageHandler",
     "ToolExecutor",
     "CCClawDaemon",
+    "APIClient",
 ]
