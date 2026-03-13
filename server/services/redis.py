@@ -1,101 +1,146 @@
-"""CC-Claw Redis Service"""
+"""CC-Claw Simple Storage Service - In-memory with file persistence"""
 
 import json
-from typing import Optional
+import threading
+from typing import Optional, Dict, Set
+from dataclasses import dataclass, field
+from datetime import datetime
 
-import redis
 
-from ..config import config
-
-
-class RedisService:
-    """Redis service for pub/sub and caching"""
+class SimpleStorage:
+    """Simple in-memory storage with file persistence - NO external dependencies"""
 
     def __init__(self):
-        self._client: Optional[redis.Redis] = None
+        self._lock = threading.RLock()
+        self._device_status: Dict[str, str] = {}  # device_id -> status
+        self._user_device: Dict[int, str] = {}  # telegram_id -> device_id
+        self._ws_connections: Dict[str, Set[str]] = {}  # device_id -> set of ws_ids
+        self._message_queue: Dict[str, list] = {}  # device_id -> messages
 
-    @property
-    def client(self) -> redis.Redis:
-        """Get Redis client"""
-        if self._client is None:
-            self._client = redis.from_url(config.redis_url, decode_responses=True)
-        return self._client
-
-    # Device Status
+    # --- Device Status ---
     def set_device_status(self, device_id: str, status: str):
         """Set device status"""
-        self.client.set(f"device:{device_id}:status", status, ex=3600)
+        with self._lock:
+            self._device_status[device_id] = status
 
     def get_device_status(self, device_id: str) -> Optional[str]:
         """Get device status"""
-        return self.client.get(f"device:{device_id}:status")
+        return self._device_status.get(device_id)
 
     def delete_device_status(self, device_id: str):
         """Delete device status"""
-        self.client.delete(f"device:{device_id}:status")
+        with self._lock:
+            self._device_status.pop(device_id, None)
 
-    # User-Device Mapping
+    # --- User-Device Mapping ---
     def set_user_device(self, user_id: int, device_id: str):
         """Map user to device"""
-        self.client.set(f"user:{user_id}:device", device_id)
+        with self._lock:
+            self._user_device[user_id] = device_id
 
     def get_user_device(self, user_id: int) -> Optional[str]:
         """Get user's device"""
-        return self.client.get(f"user:{user_id}:device")
+        return self._user_device.get(user_id)
 
     def delete_user_device(self, user_id: int):
         """Delete user-device mapping"""
-        self.client.delete(f"user:{user_id}:device")
+        with self._lock:
+            self._user_device.pop(user_id, None)
 
-    # WebSocket Connections
+    # --- WebSocket Connections ---
     def add_ws_connection(self, device_id: str, ws_id: str):
         """Add WebSocket connection"""
-        self.client.sadd(f"device:{device_id}:ws", ws_id)
+        with self._lock:
+            if device_id not in self._ws_connections:
+                self._ws_connections[device_id] = set()
+            self._ws_connections[device_id].add(ws_id)
 
     def remove_ws_connection(self, device_id: str, ws_id: str):
         """Remove WebSocket connection"""
-        self.client.srem(f"device:{device_id}:ws", ws_id)
+        with self._lock:
+            if device_id in self._ws_connections:
+                self._ws_connections[device_id].discard(ws_id)
+                if not self._ws_connections[device_id]:
+                    del self._ws_connections[device_id]
 
-    def get_ws_connections(self, device_id: str) -> set:
+    def get_ws_connections(self, device_id: str) -> Set[str]:
         """Get all WebSocket connections for device"""
-        return self.client.smembers(f"device:{device_id}:ws")
+        return self._ws_connections.get(device_id, set())
 
-    # Pub/Sub for message routing
+    # --- Message Queue (for pub/sub alternative) ---
     def publish_message(self, device_id: str, message: dict):
-        """Publish message to device channel"""
-        self.client.publish(f"device:{device_id}:messages", json.dumps(message))
+        """Store message for device (polled by WebSocket)"""
+        with self._lock:
+            if device_id not in self._message_queue:
+                self._message_queue[device_id] = []
+            self._message_queue[device_id].append(message)
 
-    def subscribe_to_device(self, device_id: str):
-        """Subscribe to device messages"""
-        return self.client.pubsub()
+    def get_messages(self, device_id: str) -> list:
+        """Get and clear messages for device"""
+        with self._lock:
+            messages = self._message_queue.get(device_id, [])
+            self._message_queue[device_id] = []
+            return messages
 
-    # Pairing
-    def set_pairing(self, code: str, data: dict, expire_seconds: int = 300):
-        """Store pairing data"""
-        self.client.setex(f"pairing:{code}", expire_seconds, json.dumps(data))
 
-    def get_pairing(self, code: str) -> Optional[dict]:
-        """Get pairing data"""
-        data = self.client.get(f"pairing:{code}")
-        return json.loads(data) if data else None
+# Global simple storage instance
+simple_storage = SimpleStorage()
 
-    def delete_pairing(self, code: str):
-        """Delete pairing data"""
-        self.client.delete(f"pairing:{code}")
 
-    # Online Users (for broadcasting)
-    def add_online_user(self, user_id: int):
-        """Add online user"""
-        self.client.sadd("online:users", user_id)
+# Keep backward compatibility
+class RedisService:
+    """Backward compatibility wrapper - now uses in-memory storage"""
 
-    def remove_online_user(self, user_id: int):
-        """Remove online user"""
-        self.client.srem("online:users", user_id)
+    def __init__(self):
+        self._client = simple_storage
 
-    def get_online_users(self) -> set:
-        """Get all online users"""
-        return self.client.smembers("online:users")
+    @property
+    def client(self):
+        """Get storage client"""
+        return simple_storage
+
+    # Delegate all methods to simple_storage
+    def set_device_status(self, device_id: str, status: str):
+        simple_storage.set_device_status(device_id, status)
+
+    def get_device_status(self, device_id: str) -> Optional[str]:
+        return simple_storage.get_device_status(device_id)
+
+    def delete_device_status(self, device_id: str):
+        simple_storage.delete_device_status(device_id)
+
+    def set_user_device(self, user_id: int, device_id: str):
+        simple_storage.set_user_device(user_id, device_id)
+
+    def get_user_device(self, user_id: int) -> Optional[str]:
+        return simple_storage.get_user_device(user_id)
+
+    def delete_user_device(self, user_id: int):
+        simple_storage.delete_user_device(user_id)
+
+    def add_ws_connection(self, device_id: str, ws_id: str):
+        simple_storage.add_ws_connection(device_id, ws_id)
+
+    def remove_ws_connection(self, device_id: str, ws_id: str):
+        simple_storage.remove_ws_connection(device_id, ws_id)
+
+    def get_ws_connections(self, device_id: str) -> Set[str]:
+        return simple_storage.get_ws_connections(device_id)
+
+    def publish_message(self, device_id: str, message: dict):
+        simple_storage.publish_message(device_id, message)
 
 
 # Global instance
 redis_service = RedisService()
+
+# Storage instance
+storage = None
+
+
+def init_storage(data_dir: str = None):
+    """Initialize file storage"""
+    from .storage import init_storage as _init_storage
+    global storage
+    storage = _init_storage(data_dir)
+    return storage

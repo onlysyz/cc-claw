@@ -7,7 +7,6 @@ import signal
 import sys
 
 from server.config import config
-from server.models.db import init_db
 from server.bot import bot
 from server.ws import ws_server
 
@@ -22,10 +21,6 @@ logger = logging.getLogger(__name__)
 async def main():
     """Main entry point"""
     logger.info("Starting CC-Claw server...")
-
-    # Initialize database
-    logger.info("Initializing database...")
-    init_db()
 
     # Start WebSocket server
     logger.info("Starting WebSocket server...")

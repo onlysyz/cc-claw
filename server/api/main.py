@@ -3,17 +3,14 @@
 import logging
 from datetime import datetime
 from typing import Optional
-from uuid import UUID
 
 from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from sqlalchemy.orm import Session
 
 from ..config import config
-from ..models.db import get_db, init_db
-from ..models.models import User, Device, DeviceToken, Pairing, DeviceStatus
-from ..services.pairing import PairingService
+from ..services.storage import init_storage
+from ..services.redis import simple_storage
 
 
 logger = logging.getLogger(__name__)
@@ -58,14 +55,7 @@ class DeviceResponse(BaseModel):
     name: str
     platform: str
     status: str
-    last_seen_at: Optional[datetime] = None
-
-
-class UserResponse(BaseModel):
-    id: str
-    telegram_id: int
-    username: Optional[str]
-    first_name: Optional[str]
+    last_seen_at: Optional[str] = None
 
 
 # --- Routes ---
@@ -73,7 +63,7 @@ class UserResponse(BaseModel):
 @app.on_event("startup")
 async def startup():
     """Initialize on startup"""
-    init_db()
+    init_storage()
     logger.info("API server started")
 
 
@@ -86,30 +76,33 @@ async def health_check():
 # --- Pairing API ---
 
 @app.post("/api/pairing/generate", response_model=PairingGenerateResponse)
-async def generate_pairing(
-    request: PairingGenerateRequest,
-    db: Session = Depends(get_db)
-):
+async def generate_pairing(request: PairingGenerateRequest):
     """Generate a pairing code"""
-    pairing_service = PairingService(db)
-    code = pairing_service.create_pairing(request.telegram_id)
+    from ..services.storage import storage
 
-    # Get expires_at from Redis
-    from ..services.redis import redis_service
-    pairing_data = redis_service.get_pairing(code)
-    expires_at = pairing_data["expires_at"] if pairing_data else ""
+    # Get or create user
+    user = storage.get_user(request.telegram_id)
+    if not user:
+        user = storage.create_user(request.telegram_id)
+
+    # Check if already paired
+    if user.get("device_ids"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Already paired. Use /unpair first."
+        )
+
+    # Generate pairing code
+    code, expires_at = storage.create_pairing(user["id"])
 
     return PairingGenerateResponse(code=code, expires_at=expires_at)
 
 
 @app.post("/api/pairing/verify")
-async def verify_pairing(
-    request: PairingVerifyRequest,
-    db: Session = Depends(get_db)
-):
+async def verify_pairing(request: PairingVerifyRequest):
     """Verify a pairing code"""
-    pairing_service = PairingService(db)
-    result = pairing_service.verify_pairing(request.code)
+    from ..services.storage import storage
+    result = storage.verify_pairing(request.code)
 
     if not result:
         raise HTTPException(
@@ -121,58 +114,80 @@ async def verify_pairing(
 
 
 @app.post("/api/pairing/complete", response_model=DeviceResponse)
-async def complete_pairing(
-    request: PairingCompleteRequest,
-    db: Session = Depends(get_db)
-):
+async def complete_pairing(request: PairingCompleteRequest):
     """Complete the pairing process"""
-    pairing_service = PairingService(db)
-    device = pairing_service.complete_pairing(
-        request.code,
-        request.device_id,
-        request.device_name,
-        request.platform,
-        request.token,
-    )
+    from ..services.storage import storage
 
-    if not device:
+    # First verify the pairing code exists
+    pairing = storage.verify_pairing(request.code)
+    if not pairing:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid pairing code or code expired"
         )
 
+    user_id = pairing["user_id"]
+
+    # Get user
+    user = storage.get_user_by_id(user_id)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="User not found"
+        )
+
+    # Delete old device if exists
+    old_device = storage.get_user_device(user_id)
+    if old_device:
+        storage.delete_device(old_device["id"])
+
+    # Create new device with provided name and platform
+    device = storage.create_device(
+        user_id=user_id,
+        name=request.device_name,
+        platform=request.platform,
+    )
+
+    # Create token
+    token, expires_at = storage.create_token(device["id"])
+
+    # Update user to device mapping in simple_storage
+    simple_storage.set_user_device(int(user["telegram_id"]), device["id"])
+
+    # Return device info and token
     return DeviceResponse(
-        id=str(device.id),
-        name=device.name,
-        platform=device.platform,
-        status=device.status.value,
-        last_seen_at=device.last_seen_at,
+        id=device["id"],
+        name=device["name"],
+        platform=device["platform"],
+        status=device["status"],
+        last_seen_at=device.get("last_seen_at"),
     )
 
 
 @app.get("/api/pairing/status/{telegram_id}")
-async def get_pairing_status(
-    telegram_id: int,
-    db: Session = Depends(get_db)
-):
+async def get_pairing_status(telegram_id: int):
     """Get pairing status for a user"""
-    pairing_service = PairingService(db)
-    device = pairing_service.get_user_device(telegram_id)
+    from ..services.storage import storage
+
+    user = storage.get_user(telegram_id)
+    if not user:
+        return {"paired": False}
+
+    device = storage.get_user_device(user["id"])
 
     if not device:
         return {"paired": False}
 
-    from ..services.redis import redis_service
-    is_online = redis_service.get_device_status(str(device.id)) == "online"
+    is_online = simple_storage.get_device_status(device["id"]) == "online"
 
     return {
         "paired": True,
         "device": {
-            "id": str(device.id),
-            "name": device.name,
-            "platform": device.platform,
+            "id": device["id"],
+            "name": device["name"],
+            "platform": device["platform"],
             "online": is_online,
-        }
+        },
     }
 
 
@@ -181,34 +196,18 @@ async def get_pairing_status(
 @app.get("/api/devices/{device_id}/status")
 async def get_device_status(device_id: str):
     """Get device status"""
-    from ..services.redis import redis_service
-    status = redis_service.get_device_status(device_id)
+    from ..services.storage import storage
+
+    device = storage.get_device(device_id)
+    if not device:
+        return {
+            "device_id": device_id,
+            "status": "not_found"
+        }
+
+    status = simple_storage.get_device_status(device_id)
 
     return {
         "device_id": device_id,
         "status": status or "offline"
     }
-
-
-# --- User API ---
-
-@app.get("/api/users/me", response_model=UserResponse)
-async def get_current_user(
-    telegram_id: int,
-    db: Session = Depends(get_db)
-):
-    """Get current user info"""
-    user = db.query(User).filter(User.telegram_id == telegram_id).first()
-
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="User not found"
-        )
-
-    return UserResponse(
-        id=str(user.id),
-        telegram_id=user.telegram_id,
-        username=user.username,
-        first_name=user.first_name,
-    )

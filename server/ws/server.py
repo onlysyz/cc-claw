@@ -3,18 +3,16 @@
 import asyncio
 import json
 import logging
-from datetime import datetime
 from typing import Dict, Set, Optional
 from dataclasses import dataclass
+from datetime import datetime
 
 import websockets
 from websockets.server import WebSocketServerProtocol
 
 from ..config import config
-from ..services.redis import redis_service
-from ..bot import send_message
-from ..models.db import SessionLocal
-from ..services.pairing import PairingService
+from ..services.storage import init_storage
+from ..services.redis import simple_storage
 
 
 logger = logging.getLogger(__name__)
@@ -37,6 +35,9 @@ class WebSocketServer:
 
     async def start(self):
         """Start WebSocket server"""
+        # Initialize storage
+        init_storage()
+
         logger.info(f"Starting WebSocket server on {config.ws_port}...")
         self.server = await websockets.serve(
             self.handle_connection,
@@ -99,36 +100,33 @@ class WebSocketServer:
                 }))
                 return
 
-            # Verify token
-            db = SessionLocal()
-            try:
-                from ..models.models import DeviceToken, Device
-                device_token = db.query(DeviceToken).filter(
-                    DeviceToken.token == token,
-                    DeviceToken.device_id == device_id,
-                ).first()
+            # Verify token using storage
+            from ..services.storage import storage
+            token_data = storage.verify_token(token)
 
-                if not device_token:
-                    await websocket.send(json.dumps({
-                        "type": "error",
-                        "code": "AUTH_FAILED",
-                        "message": "Invalid token"
-                    }))
-                    return
+            if not token_data:
+                await websocket.send(json.dumps({
+                    "type": "error",
+                    "code": "AUTH_FAILED",
+                    "message": "Invalid token"
+                }))
+                return
 
-                if device_token.expires_at < datetime.utcnow():
-                    await websocket.send(json.dumps({
-                        "type": "error",
-                        "code": "TOKEN_EXPIRED",
-                        "message": "Token expired"
-                    }))
-                    return
+            if token_data.get("device_id") != device_id:
+                await websocket.send(json.dumps({
+                    "type": "error",
+                    "code": "AUTH_FAILED",
+                    "message": "Token does not match device"
+                }))
+                return
 
-                device = db.query(Device).filter(Device.id == device_id).first()
-                user_id = device.user.telegram_id if device else None
-
-            finally:
-                db.close()
+            # Get device and user info
+            device = storage.get_device(device_id)
+            user_id = None
+            if device:
+                user = storage.get_user_by_id(device.get("user_id"))
+                if user:
+                    user_id = int(user["telegram_id"])
 
             # Create client
             client = Client(
@@ -142,8 +140,9 @@ class WebSocketServer:
                 self.clients[device_id] = set()
             self.clients[device_id].add(client)
 
-            # Update Redis
-            redis_service.set_device_status(device_id, "online")
+            # Update device status
+            simple_storage.set_device_status(device_id, "online")
+            storage.update_device_status(device_id, "online")
 
             logger.info(f"Device {device_id} connected")
 
@@ -153,9 +152,15 @@ class WebSocketServer:
                 "device_id": device_id,
             }))
 
-            # Listen for messages
-            async for raw_message in websocket:
-                await self.handle_message(client, raw_message)
+            # Start message polling task for this client
+            message_task = asyncio.create_task(self.poll_messages(client))
+
+            # Listen for messages from client
+            try:
+                async for raw_message in websocket:
+                    await self.handle_message(client, raw_message)
+            finally:
+                message_task.cancel()
 
         except websockets.exceptions.ConnectionClosed:
             logger.info("WebSocket connection closed")
@@ -165,6 +170,23 @@ class WebSocketServer:
             # Cleanup
             if client:
                 self._remove_client(client)
+
+    async def poll_messages(self, client: Client):
+        """Poll for messages from Telegram and send to client"""
+        while True:
+            try:
+                messages = simple_storage.get_messages(client.device_id)
+                for msg in messages:
+                    await client.websocket.send(json.dumps({
+                        "type": "message",
+                        "data": msg,
+                    }))
+                await asyncio.sleep(0.5)  # Poll every 500ms
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"Error polling messages: {e}")
+                break
 
     async def handle_message(self, client: Client, raw_message: str):
         """Handle message from device"""
@@ -182,9 +204,9 @@ class WebSocketServer:
                     if len(content) > 4000:
                         chunks = [content[i:i+4000] for i in range(0, len(content), 4000)]
                         for chunk in chunks:
-                            await send_message(client.user_id, chunk)
+                            await self._send_to_telegram(client.user_id, chunk)
                     else:
-                        await send_message(client.user_id, content)
+                        await self._send_to_telegram(client.user_id, content)
 
             elif msg_type == "ack":
                 # Message acknowledged
@@ -199,6 +221,11 @@ class WebSocketServer:
         except json.JSONDecodeError:
             logger.error(f"Invalid JSON from device: {raw_message}")
 
+    async def _send_to_telegram(self, user_id: int, text: str):
+        """Send message to Telegram user"""
+        from ..bot import send_message
+        await send_message(user_id, text)
+
     def _remove_client(self, client: Client):
         """Remove client from connections"""
         if client.device_id in self.clients:
@@ -206,7 +233,12 @@ class WebSocketServer:
 
             if not self.clients[client.device_id]:
                 del self.clients[client.device_id]
-                redis_service.delete_device_status(client.device_id)
+                simple_storage.delete_device_status(client.device_id)
+
+                from ..services.storage import storage
+                if storage:
+                    storage.update_device_status(client.device_id, "offline")
+
                 logger.info(f"Device {client.device_id} disconnected")
 
     async def send_to_device(self, device_id: str, message: dict):
