@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+from datetime import datetime
 from typing import Dict, Set, Optional
 from dataclasses import dataclass
 
@@ -115,7 +116,7 @@ class WebSocketServer:
                     }))
                     return
 
-                if device_token.expires_at.replace(tzinfo=None).isoformat() < asyncio.get_event_loop().time():
+                if device_token.expires_at < datetime.utcnow():
                     await websocket.send(json.dumps({
                         "type": "error",
                         "code": "TOKEN_EXPIRED",
