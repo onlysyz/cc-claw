@@ -61,6 +61,11 @@ class CCClawDaemon:
             self.config,
         )
 
+        # Register message handlers
+        self.ws_manager.on("message", self.handler.handle_message)
+        self.ws_manager.on("error", self.handler.handle_error)
+        self.ws_manager.on("delivered", self.handler.handle_delivered)
+
         # Connect and start listening
         if await self.ws_manager.connect():
             if await self.ws_manager.register():

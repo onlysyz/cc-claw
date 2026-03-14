@@ -102,9 +102,13 @@ class FileStorage:
     # --- Device Methods ---
     def create_device(self, user_id: str, name: str, platform: str) -> dict:
         """Create a new device"""
+        device_id = str(uuid.uuid4())
+        return self.create_device_with_id(device_id, user_id, name, platform)
+
+    def create_device_with_id(self, device_id: str, user_id: str, name: str, platform: str) -> dict:
+        """Create a new device with specific ID"""
         devices = self._read_json(self.devices_file)
 
-        device_id = str(uuid.uuid4())
         device_data = {
             "id": device_id,
             "user_id": user_id,
@@ -188,6 +192,17 @@ class FileStorage:
         tokens[token] = token_data
         self._write_json(self.tokens_file, tokens)
         return token, expires_at.isoformat()
+
+    def add_token(self, token: str, device_id: str, expires_at: str):
+        """Add a token for a device"""
+        tokens = self._read_json(self.tokens_file)
+        token_data = {
+            "token": token,
+            "device_id": device_id,
+            "expires_at": expires_at,
+        }
+        tokens[token] = token_data
+        self._write_json(self.tokens_file, tokens)
 
     def verify_token(self, token: str) -> Optional[dict]:
         """Verify a token"""

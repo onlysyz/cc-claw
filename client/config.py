@@ -19,6 +19,10 @@ class ClientConfig:
     auto_reconnect: bool = True
     reconnect_delay: int = 5
     log_level: str = "INFO"
+    # Permission mode: "default" (ask), "bypassPermissions" or "yolo" (skip all)
+    permission_mode: str = "default"
+    # Working directory for Claude sessions
+    working_dir: str = "/tmp"
 
     @classmethod
     def load(cls, config_path: Optional[Path] = None) -> "ClientConfig":

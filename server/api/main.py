@@ -56,6 +56,7 @@ class DeviceResponse(BaseModel):
     platform: str
     status: str
     last_seen_at: Optional[str] = None
+    token: Optional[str] = None
 
 
 # --- Routes ---
@@ -141,15 +142,22 @@ async def complete_pairing(request: PairingCompleteRequest):
     if old_device:
         storage.delete_device(old_device["id"])
 
-    # Create new device with provided name and platform
-    device = storage.create_device(
+    # Use the device_id and token provided by the client
+    device_id = request.device_id
+    device_token = request.token
+
+    # Create device with the provided device_id
+    device = storage.create_device_with_id(
+        device_id=device_id,
         user_id=user_id,
         name=request.device_name,
         platform=request.platform,
     )
 
-    # Create token
-    token, expires_at = storage.create_token(device["id"])
+    # Use the token provided by the client
+    from datetime import datetime, timedelta
+    expires_at = (datetime.utcnow() + timedelta(days=7)).isoformat()
+    storage.add_token(device_token, device_id, expires_at)
 
     # Update user to device mapping in simple_storage
     simple_storage.set_user_device(int(user["telegram_id"]), device["id"])
@@ -161,6 +169,7 @@ async def complete_pairing(request: PairingCompleteRequest):
         platform=device["platform"],
         status=device["status"],
         last_seen_at=device.get("last_seen_at"),
+        token=device_token,
     )
 
 

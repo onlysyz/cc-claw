@@ -5,11 +5,14 @@ import asyncio
 import logging
 import signal
 import sys
+import threading
 
 from server.config import config
 from server.bot import bot
 from server.ws import ws_server
+from server.api.main import app as api_app
 from server.services.tailscale import tailscale
+import uvicorn
 
 
 logging.basicConfig(
@@ -57,14 +60,35 @@ async def main():
     logger.info("Starting WebSocket server...")
     await ws_server.start()
 
-    # Start Telegram bot
-    logger.info("Starting Telegram bot...")
-    await bot.start()
+    # Start API server in a separate thread
+    logger.info(f"Starting API server on {config.host}:{config.api_port}...")
+    api_config = uvicorn.Config(
+        api_app,
+        host=config.host,
+        port=config.api_port,
+        log_level="info",
+    )
+    api_server = uvicorn.Server(api_config)
+    api_thread = threading.Thread(target=api_server.run, daemon=True)
+    api_thread.start()
+    logger.info(f"API server started on {config.host}:{config.api_port}")
+
+    # Start Telegram bot in a separate thread (it's blocking)
+    logger.info("Starting Telegram bot in background...")
+    bot_thread = threading.Thread(target=bot.start, daemon=True)
+    bot_thread.start()
+
+    # Keep the main thread alive
+    logger.info("Server running. Press Ctrl+C to stop.")
+    await asyncio.Event().wait()
 
 
 async def shutdown():
     """Shutdown gracefully"""
     logger.info("Shutting down...")
+
+    # Stop Telegram bot
+    bot.stop()
 
     # Stop Tailscale
     await tailscale.stop()
@@ -73,6 +97,7 @@ async def shutdown():
     await ws_server.stop()
 
     logger.info("Server stopped")
+    sys.exit(0)
 
 
 def signal_handler(sig, frame):

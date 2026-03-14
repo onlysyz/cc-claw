@@ -34,24 +34,34 @@ class MessageHandler:
 
     async def handle_message(self, message: Message):
         """Handle incoming message from user"""
-        message_id = message.message_id
-        content = message.data.get("content", "")
-        chat_id = message.data.get("chat_id")
+        try:
+            message_id = message.message_id
+            content = message.data.get("content", "")
+            chat_id = message.data.get("chat_id")
 
-        logger.info(f"Received message: {content[:50]}...")
+            logger.info(f"Received message: {content[:50]}...")
 
-        # Send acknowledgment first
-        if message_id:
-            await self.ws.send_ack(message_id)
+            # Send acknowledgment first
+            if message_id:
+                await self.ws.send_ack(message_id)
 
-        # Execute with Claude
-        response = await self.claude.execute(content)
+            # Execute with Claude
+            logger.info("Calling Claude executor...")
+            response = await self.claude.execute(content)
+            logger.info(f"Claude response: {response[:100]}...")
 
-        # Send response back to server
-        if message_id:
-            success = await self.ws.send_message(response, message_id)
-            if success and self.on_message_sent:
-                await self.on_message_sent(message_id)
+            # Send response back to server
+            if message_id:
+                logger.info(f"Sending response back to server, message_id={message_id}")
+                success = await asyncio.wait_for(
+                    self.ws.send_message(response, message_id),
+                    timeout=30
+                )
+                logger.info(f"Response sent: {success}")
+                if success and self.on_message_sent:
+                    await self.on_message_sent(message_id)
+        except Exception as e:
+            logger.error(f"Error in handle_message: {e}", exc_info=True)
 
     async def handle_error(self, message: Message):
         """Handle error message from server"""

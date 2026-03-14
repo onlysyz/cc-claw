@@ -188,6 +188,8 @@ def cmd_config(args):
         print(f"Server API URL: {config.server_api_url}")
         print(f"Device ID: {config.device_id or 'Not configured'}")
         print(f"Claude Path: {config.claude_path}")
+        print(f"Working Directory: {config.working_dir or '/tmp'}")
+        print(f"Permission Mode: {config.permission_mode} (use 'bypassPermissions' to skip all)")
         print(f"Timeout: {config.timeout}s")
         print(f"Auto Reconnect: {config.auto_reconnect}")
         print(f"Log Level: {config.log_level}")

@@ -6,6 +6,7 @@ import logging
 from typing import Dict, Set, Optional
 from dataclasses import dataclass
 from datetime import datetime
+from urllib.parse import parse_qs, urlparse
 
 import websockets
 from websockets.server import WebSocketServerProtocol
@@ -25,6 +26,9 @@ class Client:
     device_id: str
     user_id: Optional[int] = None
 
+    def __hash__(self):
+        return hash(self.device_id)
+
 
 class WebSocketServer:
     """WebSocket server for device communication"""
@@ -38,7 +42,7 @@ class WebSocketServer:
         # Initialize storage
         init_storage()
 
-        logger.info(f"Starting WebSocket server on {config.ws_port}...")
+        logger.info(f"Starting WebSocket server on {config.host}:{config.ws_port}...")
         self.server = await websockets.serve(
             self.handle_connection,
             config.host,
@@ -46,7 +50,8 @@ class WebSocketServer:
             ping_interval=30,
             ping_timeout=10,
         )
-        logger.info(f"WebSocket server started on port {config.ws_port}")
+        logger.info(f"WebSocket server started on {config.host}:{config.ws_port}")
+        logger.info(f"Server object: {self.server}")
 
     async def stop(self):
         """Stop WebSocket server"""
@@ -57,15 +62,22 @@ class WebSocketServer:
 
     async def handle_connection(self, websocket: WebSocketServerProtocol, path: str):
         """Handle new WebSocket connection"""
+        logger.info(f"New connection from {websocket.remote_address}, path: {path}")
         client: Optional[Client] = None
 
         try:
+            # Try to get token and device_id from query string first
+            query = parse_qs(urlparse(path).query)
+            query_token = query.get("token", [None])[0]
+            query_device_id = query.get("device_id", [None])[0]
+
             # Wait for registration message
             try:
                 register_msg = await asyncio.wait_for(
                     websocket.recv(),
                     timeout=10
                 )
+                logger.info(f"Received registration message: {register_msg[:200]}...")
             except asyncio.TimeoutError:
                 logger.warning("Client did not register in time")
                 return
@@ -74,6 +86,7 @@ class WebSocketServer:
             try:
                 data = json.loads(register_msg)
             except json.JSONDecodeError:
+                logger.error(f"Invalid JSON: {register_msg}")
                 await websocket.send(json.dumps({
                     "type": "error",
                     "code": "INVALID_JSON",
@@ -82,6 +95,7 @@ class WebSocketServer:
                 return
 
             if data.get("type") != "register":
+                logger.error(f"Invalid message type: {data.get('type')}")
                 await websocket.send(json.dumps({
                     "type": "error",
                     "code": "INVALID_MESSAGE",
@@ -89,8 +103,11 @@ class WebSocketServer:
                 }))
                 return
 
-            device_id = data.get("device_id")
-            token = data.get("token")
+            # Use query string params or message params
+            device_id = query_device_id or data.get("device_id")
+            token = query_token or data.get("token")
+
+            logger.info(f"device_id={device_id}, token={token}")
 
             if not device_id or not token:
                 await websocket.send(json.dumps({
@@ -103,6 +120,8 @@ class WebSocketServer:
             # Verify token using storage
             from ..services.storage import storage
             token_data = storage.verify_token(token)
+
+            logger.info(f"Token verification result: {token_data}")
 
             if not token_data:
                 await websocket.send(json.dumps({
@@ -158,6 +177,7 @@ class WebSocketServer:
             # Listen for messages from client
             try:
                 async for raw_message in websocket:
+                    logger.info(f"Received raw message from client: {raw_message[:100]}...")
                     await self.handle_message(client, raw_message)
             finally:
                 message_task.cancel()
@@ -165,7 +185,7 @@ class WebSocketServer:
         except websockets.exceptions.ConnectionClosed:
             logger.info("WebSocket connection closed")
         except Exception as e:
-            logger.error(f"Error handling connection: {e}")
+            logger.error(f"Error handling connection: {e}", exc_info=True)
         finally:
             # Cleanup
             if client:
@@ -173,14 +193,23 @@ class WebSocketServer:
 
     async def poll_messages(self, client: Client):
         """Poll for messages from Telegram and send to client"""
+        logger.info(f"Started polling messages for device {client.device_id}")
         while True:
             try:
                 messages = simple_storage.get_messages(client.device_id)
+                if messages:
+                    logger.info(f"Found {len(messages)} messages for device {client.device_id}")
                 for msg in messages:
-                    await client.websocket.send(json.dumps({
-                        "type": "message",
-                        "data": msg,
-                    }))
+                    try:
+                        msg_json = json.dumps({
+                            "type": "message",
+                            "data": msg,
+                        })
+                        logger.info(f"Sending message to client: {msg_json[:100]}...")
+                        await client.websocket.send(msg_json)
+                        logger.info(f"Message sent to client successfully")
+                    except Exception as e:
+                        logger.error(f"Error sending message to client: {e}")
                 await asyncio.sleep(0.5)  # Poll every 500ms
             except asyncio.CancelledError:
                 break
@@ -193,11 +222,14 @@ class WebSocketServer:
         try:
             data = json.loads(raw_message)
             msg_type = data.get("type")
+            logger.info(f"Received message from device: type={msg_type}, data={str(data)[:100]}")
 
             if msg_type == "message":
                 # Forward message response to Telegram user
                 content = data.get("content", "")
                 message_id = data.get("message_id")
+
+                logger.info(f"Sending response to Telegram user {client.user_id}: {content[:50]}...")
 
                 if client.user_id:
                     # Split long messages
@@ -207,6 +239,8 @@ class WebSocketServer:
                             await self._send_to_telegram(client.user_id, chunk)
                     else:
                         await self._send_to_telegram(client.user_id, content)
+
+                logger.info("Message sent to Telegram")
 
             elif msg_type == "ack":
                 # Message acknowledged
@@ -224,7 +258,7 @@ class WebSocketServer:
     async def _send_to_telegram(self, user_id: int, text: str):
         """Send message to Telegram user"""
         from ..bot import send_message
-        await send_message(user_id, text)
+        send_message(user_id, text)
 
     def _remove_client(self, client: Client):
         """Remove client from connections"""

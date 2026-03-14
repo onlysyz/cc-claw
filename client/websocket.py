@@ -36,21 +36,22 @@ class WebSocketManager:
     async def connect(self) -> bool:
         """Connect to WebSocket server"""
         try:
-            headers = {}
-            if self.config.device_token:
-                headers["Authorization"] = f"Bearer {self.config.device_token}"
+            # Build URL with token as query param
+            url = self.config.server_ws_url
+            if self.config.device_token and self.config.device_id:
+                separator = "&" if "?" in url else "?"
+                url = f"{url}{separator}token={self.config.device_token}&device_id={self.config.device_id}"
 
             self.ws = await websockets.connect(
-                self.config.server_ws_url,
+                url,
                 ping_interval=30,
                 ping_timeout=10,
-                headers=headers,
             )
             logger.info("Connected to WebSocket server")
             self._running = True
             return True
         except Exception as e:
-            logger.error(f"Failed to connect: {e}")
+            logger.error(f"Failed to connect: {e}", exc_info=True)
             return False
 
     async def disconnect(self):
@@ -117,16 +118,19 @@ class WebSocketManager:
 
         try:
             async for raw_message in self.ws:
+                logger.info(f"Received from server: {raw_message[:100]}...")
                 try:
                     data = json.loads(raw_message)
+                    msg_data = data.get("data", {})
                     message = Message(
                         type=data.get("type", ""),
-                        data=data.get("data", {}),
-                        message_id=data.get("message_id"),
+                        data=msg_data,
+                        message_id=msg_data.get("message_id"),
                     )
 
                     handler = self._message_handlers.get(message.type)
                     if handler:
+                        logger.info(f"Calling handler for {message.type}")
                         asyncio.create_task(handler(message))
                     else:
                         logger.debug(f"No handler for message type: {message.type}")
@@ -134,10 +138,10 @@ class WebSocketManager:
                 except json.JSONDecodeError:
                     logger.error(f"Invalid JSON: {raw_message}")
 
-        except websockets.exceptions.ConnectionClosed:
-            logger.warning("WebSocket connection closed")
+        except websockets.exceptions.ConnectionClosed as e:
+            logger.warning(f"WebSocket connection closed: {e}")
         except Exception as e:
-            logger.error(f"Error in listen: {e}")
+            logger.error(f"Error in listen: {e}", exc_info=True)
         finally:
             self._running = False
             if self.config.auto_reconnect:
