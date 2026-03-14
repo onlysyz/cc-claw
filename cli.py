@@ -204,7 +204,8 @@ def cmd_setup(args):
     # Step 1: Server URL
     print("Step 1: Configure Server URL")
     print(f"  Current: {config.server_api_url}")
-    server_url = input("  Enter server URL (or press Enter to keep): ").strip()
+    print("  Default: http://localhost:3000 (local development)")
+    server_url = input("  Enter server URL (or press Enter for localhost): ").strip()
     if server_url:
         config.server_api_url = server_url
         # Derive WS URL from API URL
@@ -214,9 +215,12 @@ def cmd_setup(args):
         else:
             ws_url += "/ws"
         config.server_ws_url = ws_url
-        print(f"  Set server URLs:")
-        print(f"    API: {config.server_api_url}")
-        print(f"    WS:  {config.server_ws_url}")
+    elif "example.com" in config.server_api_url:
+        # Default to localhost
+        config.server_api_url = "http://localhost:3000"
+        config.server_ws_url = "ws://localhost:3001"
+    print(f"  API: {config.server_api_url}")
+    print(f"  WS:  {config.server_ws_url}")
 
     # Step 2: Claude path
     print("\nStep 2: Configure Claude CLI")
@@ -279,13 +283,13 @@ def cmd_install(args):
         cmd_start(args)
         return
 
-    # Check if server URL is configured
+    # Check if server URL is configured (default to localhost)
     if "example.com" in config.server_api_url:
-        print("Step 1: Configure Server URL")
-        server_url = input("  Enter your server URL: ").strip()
+        print("Step 1: Server URL")
+        print("  Default: http://localhost:3000 (local development)")
+        server_url = input("  Enter server URL (or press Enter for localhost): ").strip()
         if not server_url:
-            print("✗ Server URL required!")
-            return
+            server_url = "http://localhost:3000"
         config.server_api_url = server_url
         # Derive WS URL
         ws_url = server_url.replace("https://", "wss://").replace("http://", "ws://")
