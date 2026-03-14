@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Telegram bot to remotely control Claude Code CLI"
 readme = "README.md"
 license = {text = "MIT"}
-requires-python = ">=3.10"
+requires-python = ">=3.8"
 authors = [
     {name = "CC-Claw Team", email = "team@cc-claw.example.com"}
 ]
