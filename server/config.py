@@ -12,9 +12,6 @@ class ServerConfig:
     api_port: int = 3000
     ws_port: int = 3001
 
-    # Redis (optional - not needed anymore)
-    redis_url: str = "redis://localhost:6379/0"
-
     # Telegram
     telegram_bot_token: str = ""
 
@@ -43,7 +40,6 @@ class ServerConfig:
             host=os.getenv("HOST", "0.0.0.0"),
             api_port=int(os.getenv("API_PORT", "3000")),
             ws_port=int(os.getenv("WS_PORT", "3001")),
-            redis_url=os.getenv("REDIS_URL", cls.redis_url),
             telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN", ""),
             jwt_secret=os.getenv("JWT_SECRET", cls.jwt_secret),
             data_dir=os.getenv("DATA_DIR", cls.data_dir),
