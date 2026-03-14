@@ -77,15 +77,36 @@ docker-compose up -d
 
 ### 2. Client Setup (Local Machine)
 
+#### One-Command Install (Recommended)
+
 ```bash
 # Install client
 pip install -e .
 
-# Configure server URL (replace with your server address)
+# Run one-command install (setup + pair + start)
+cc-claw install
+```
+
+This will:
+1. Ask for your server URL
+2. Check Claude CLI
+3. Guide you through pairing
+4. Start the daemon
+
+#### Manual Setup
+
+```bash
+# Install client
+pip install -e .
+
+# Interactive setup wizard
+cc-claw setup
+
+# Or manually configure
 cc-claw config --set server_api_url=https://your-server.com/api
 cc-claw config --set server_ws_url=wss://your-server.com/ws
 
-# Start pairing with Telegram bot
+# Pair with Telegram bot
 cc-claw pair
 ```
 
