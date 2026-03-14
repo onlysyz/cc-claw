@@ -195,6 +195,174 @@ def cmd_config(args):
         print(f"Log Level: {config.log_level}")
 
 
+def cmd_setup(args):
+    """Interactive setup wizard"""
+    config = ClientConfig.load()
+
+    print("=== CC-Claw Setup Wizard ===\n")
+
+    # Step 1: Server URL
+    print("Step 1: Configure Server URL")
+    print(f"  Current: {config.server_api_url}")
+    server_url = input("  Enter server URL (or press Enter to keep): ").strip()
+    if server_url:
+        config.server_api_url = server_url
+        # Derive WS URL from API URL
+        ws_url = server_url.replace("https://", "wss://").replace("http://", "ws://")
+        if "/api" in ws_url:
+            ws_url = ws_url.replace("/api", "/ws")
+        else:
+            ws_url += "/ws"
+        config.server_ws_url = ws_url
+        print(f"  Set server URLs:")
+        print(f"    API: {config.server_api_url}")
+        print(f"    WS:  {config.server_ws_url}")
+
+    # Step 2: Claude path
+    print("\nStep 2: Configure Claude CLI")
+    print(f"  Current: {config.claude_path}")
+    claude_path = input("  Enter Claude CLI path (or press Enter to keep): ").strip()
+    if claude_path:
+        config.claude_path = claude_path
+        print(f"  Set claude_path: {config.claude_path}")
+
+    # Step 3: Permission mode
+    print("\nStep 3: Permission Mode")
+    print("  Options:")
+    print("    1. default    - Ask for permissions when needed")
+    print("    2. bypassPermissions - Skip all permission prompts (recommended)")
+    choice = input("  Enter choice [1-2] (default: 2): ").strip() or "2"
+    if choice == "2":
+        config.permission_mode = "bypassPermissions"
+        print("  Set permission_mode: bypassPermissions")
+    else:
+        config.permission_mode = "default"
+        print("  Set permission_mode: default")
+
+    # Step 4: Working directory
+    print("\nStep 4: Working Directory")
+    print(f"  Current: {config.working_dir or '/tmp'}")
+    work_dir = input("  Enter working directory (or press Enter to keep): ").strip()
+    if work_dir:
+        config.working_dir = work_dir
+        print(f"  Set working_dir: {config.working_dir}")
+
+    # Save config
+    config.save()
+    print("\n✓ Configuration saved!")
+
+    # Check Claude availability
+    from client import ClaudeExecutor
+    claude = ClaudeExecutor(config)
+    if claude.is_available():
+        print(f"✓ Claude CLI found: {claude.get_version()}")
+    else:
+        print("✗ Claude CLI not found! Please install Claude Code first.")
+        print("  Install: https://docs.anthropic.com/en/docs/claude-code/initial-setup")
+
+    print("\n=== Setup Complete ===")
+    print("\nNext steps:")
+    print("  1. Run 'cc-claw pair' to pair with Telegram bot")
+    print("  2. Run 'cc-claw start' to start the daemon")
+
+
+def cmd_install(args):
+    """One-command install: setup + pair + start"""
+    config = ClientConfig.load()
+
+    print("=== CC-Claw One-Command Install ===\n")
+
+    # Check if already paired
+    if config.device_id and config.device_token:
+        print("✓ Already paired!")
+        print("\nStarting daemon...")
+        cmd_start(args)
+        return
+
+    # Check if server URL is configured
+    if "example.com" in config.server_api_url:
+        print("Step 1: Configure Server URL")
+        server_url = input("  Enter your server URL: ").strip()
+        if not server_url:
+            print("✗ Server URL required!")
+            return
+        config.server_api_url = server_url
+        # Derive WS URL
+        ws_url = server_url.replace("https://", "wss://").replace("http://", "ws://")
+        if "/api" in ws_url:
+            ws_url = ws_url.replace("/api", "/ws")
+        else:
+            ws_url += "/ws"
+        config.server_ws_url = ws_url
+        print(f"  API: {config.server_api_url}")
+        print(f"  WS:  {config.server_ws_url}")
+
+    # Set recommended defaults
+    config.permission_mode = "bypassPermissions"
+    config.working_dir = "/tmp/cc-claw-sessions"
+
+    # Check Claude
+    from client import ClaudeExecutor
+    claude = ClaudeExecutor(config)
+    if not claude.is_available():
+        print("\n✗ Claude CLI not found!")
+        print("  Please install Claude Code first:")
+        print("  https://docs.anthropic.com/en/docs/claude-code/initial-setup")
+        return
+
+    print(f"✓ Claude CLI: {claude.get_version()}")
+
+    # Save config
+    config.save()
+
+    # Do pairing
+    print("\n=== Pairing with Telegram ===")
+    print("  1. Open Telegram and send /pair to your bot")
+    print("  2. Enter the 6-digit code below:\n")
+
+    device_id = str(uuid.uuid4())
+    device_token = str(uuid.uuid4())
+    device_name = platform.node() or "My Device"
+    device_platform = platform.system().lower()
+
+    print(f"Device: {device_name} ({device_platform})")
+    pairing_code = input("Enter pairing code: ").strip().upper()
+
+    if not pairing_code or len(pairing_code) != 6:
+        print("✗ Invalid pairing code")
+        return
+
+    print("\nCompleting pairing...")
+
+    async def complete():
+        from client import APIClient
+        api = APIClient(config)
+        result = await api.complete_pairing(
+            code=pairing_code,
+            device_id=device_id,
+            device_name=device_name,
+            platform=device_platform,
+            token=device_token,
+        )
+        return result
+
+    result = asyncio.run(complete())
+
+    if result:
+        config.device_id = device_id
+        config.device_token = device_token
+        config.save()
+        print("\n✓ Pairing successful!")
+    else:
+        print("\n✗ Pairing failed!")
+        print("  - Check if the code is correct")
+        print("  - Code expires in 5 minutes")
+        return
+
+    print("\n=== Starting daemon ===")
+    cmd_start(args)
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="CC-Claw - Telegram bot to control Claude Code CLI"
@@ -226,6 +394,14 @@ def main():
     parser_config.add_argument("--get", metavar="KEY", help="Get config value")
     parser_config.add_argument("--set", metavar="KEY=VALUE", help="Set config value")
     parser_config.set_defaults(func=cmd_config)
+
+    # setup
+    parser_setup = subparsers.add_parser("setup", help="Interactive setup wizard")
+    parser_setup.set_defaults(func=cmd_setup)
+
+    # install
+    parser_install = subparsers.add_parser("install", help="One-command install: setup + pair + start")
+    parser_install.set_defaults(func=cmd_install)
 
     args = parser.parse_args()
 
