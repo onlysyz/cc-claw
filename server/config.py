@@ -33,6 +33,9 @@ class ServerConfig:
     # Storage
     data_dir: str = ""  # Default to ~/.cc-claw/data
 
+    # Tailscale
+    tailscale_mode: str = "off"  # off | serve | funnel
+
     @classmethod
     def from_env(cls) -> "ServerConfig":
         """Load config from environment variables"""
@@ -44,6 +47,7 @@ class ServerConfig:
             telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN", ""),
             jwt_secret=os.getenv("JWT_SECRET", cls.jwt_secret),
             data_dir=os.getenv("DATA_DIR", cls.data_dir),
+            tailscale_mode=os.getenv("TAILSCALE_MODE", "off"),
         )
 
 
