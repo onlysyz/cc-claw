@@ -312,3 +312,8 @@ bot = CCClawBot()
 def send_message(telegram_id: int, text: str):
     """Helper function to send message"""
     bot.send_message_to_user(telegram_id, text)
+
+
+def send_photo(telegram_id: int, photo_path: str, caption: str = None):
+    """Helper function to send photo"""
+    bot.send_photo_to_user(telegram_id, photo_path, caption)

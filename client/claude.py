@@ -28,9 +28,17 @@ class ClaudeExecutor:
                 env.pop(key, None)
         return env
 
-    async def execute(self, prompt: str) -> str:
-        """Execute a prompt using --print mode with JSON output"""
+    async def execute(self, prompt: str) -> tuple[str, list[str]]:
+        """Execute a prompt using --print mode with JSON output
+        Returns: (text_response, list_of_image_paths)
+        """
+        import os
         work_dir = getattr(self.config, 'working_dir', '/tmp') or '/tmp'
+        # Create work directory if not exists
+        os.makedirs(work_dir, exist_ok=True)
+
+        # Check for existing screenshots before running
+        existing_screenshots = self._get_screenshot_files(work_dir)
 
         # Build command - use --print with JSON output
         cmd = [
@@ -82,26 +90,87 @@ class ClaudeExecutor:
                     result = data.get('result', '')
                     if result:
                         logger.info(f"Claude response: {result[:100]}...")
-                        return result
+
+                        # Extract file paths from text
+                        file_paths = self._extract_file_paths(result)
+                        logger.info(f"Extracted file paths: {file_paths}")
+
+                        return result, file_paths
 
                 # If no valid JSON, return raw output
                 if output:
                     logger.info(f"Claude raw response: {output[:100]}...")
-                    return output.strip()
+                    return output.strip(), []
 
-                return "No response"
+                return "No response", []
 
             except json.JSONDecodeError as e:
                 logger.error(f"Failed to parse JSON: {e}")
                 logger.error(f"Raw output: {output[:500]}")
-                return f"Error parsing response: {output[:200]}"
+                return f"Error parsing response: {output[:200]}", []
 
         except asyncio.TimeoutError:
             logger.error("Timeout waiting for Claude")
-            return "Timeout"
+            return "Timeout", []
         except Exception as e:
             logger.error(f"Error running Claude: {e}", exc_info=True)
-            return f"Error: {str(e)}"
+            return f"Error: {str(e)}", []
+
+    def _get_screenshot_files(self, work_dir: str) -> set:
+        """Get list of existing screenshot files"""
+        import os
+        screenshot_files = set()
+
+        # Check /tmp
+        if os.path.exists("/tmp"):
+            files = os.listdir("/tmp")
+            screenshot_files.update(f for f in files if f.startswith("cc-claw-screenshot") or f.startswith("screenshot"))
+
+        # Also check Desktop
+        desktop = os.path.expanduser("~/Desktop")
+        if os.path.exists(desktop):
+            files = os.listdir(desktop)
+            screenshot_files.update(f"Desktop/{f}" for f in files if f.endswith(('.png', '.jpg', '.jpeg', '.gif', '.webp')))
+
+        return screenshot_files
+
+    def _get_new_screenshots(self, work_dir: str, existing: set) -> list[str]:
+        """Get new screenshot files created after execution"""
+        import os
+        current = self._get_screenshot_files(work_dir)
+        new_files = current - existing
+        # Return full paths
+        paths = []
+        for f in new_files:
+            if f.startswith("Desktop/"):
+                path = os.path.expanduser(f"~/{f}")
+            else:
+                path = f"/tmp/{f}"
+            if os.path.exists(path):
+                paths.append(path)
+        return paths
+
+    def _extract_file_paths(self, text: str) -> list[str]:
+        """Extract file paths from Claude's response text"""
+        import os
+        import re
+
+        paths = []
+
+        # Pattern 1: content in backticks like `screenshot.png`
+        backtick_pattern = r'`([^`]+)`'
+        matches = re.findall(backtick_pattern, text)
+        for filename in matches:
+            # Check if it's an image file
+            if filename.endswith(('.png', '.jpg', '.jpeg', '.gif', '.webp')):
+                # Try to find it on Desktop or in common locations
+                for base in [os.path.expanduser("~/Desktop"), "/tmp", os.getcwd()]:
+                    full_path = os.path.join(base, filename)
+                    if os.path.isfile(full_path):
+                        paths.append(full_path)
+                        break
+
+        return paths
 
     def is_available(self) -> bool:
         """Check if Claude CLI is available"""

@@ -228,16 +228,26 @@ class WebSocketServer:
                 # Forward message response to Telegram user
                 content = data.get("content", "")
                 message_id = data.get("message_id")
+                images = data.get("images", [])
 
                 logger.info(f"Sending response to Telegram user {client.user_id}: {content[:50]}...")
 
                 if client.user_id:
-                    # Split long messages
+                    # Send images first if any
+                    for img_path in images:
+                        try:
+                            from ..bot import send_photo
+                            send_photo(client.user_id, img_path)
+                            logger.info(f"Sent image: {img_path}")
+                        except Exception as e:
+                            logger.error(f"Failed to send image {img_path}: {e}")
+
+                    # Then send text (split if too long)
                     if len(content) > 4000:
                         chunks = [content[i:i+4000] for i in range(0, len(content), 4000)]
                         for chunk in chunks:
                             await self._send_to_telegram(client.user_id, chunk)
-                    else:
+                    elif content:
                         await self._send_to_telegram(client.user_id, content)
 
                 logger.info("Message sent to Telegram")

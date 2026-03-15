@@ -47,14 +47,16 @@ class MessageHandler:
 
             # Execute with Claude
             logger.info("Calling Claude executor...")
-            response = await self.claude.execute(content)
+            response, images = await self.claude.execute(content)
             logger.info(f"Claude response: {response[:100]}...")
+            if images:
+                logger.info(f"Claude generated {len(images)} images")
 
-            # Send response back to server
+            # Send response back to server (with images if any)
             if message_id:
                 logger.info(f"Sending response back to server, message_id={message_id}")
                 success = await asyncio.wait_for(
-                    self.ws.send_message(response, message_id),
+                    self.ws.send_message(response, message_id, images),
                     timeout=30
                 )
                 logger.info(f"Response sent: {success}")
