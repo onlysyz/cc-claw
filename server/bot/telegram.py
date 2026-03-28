@@ -42,6 +42,7 @@ class CCClawBot:
         dp.add_handler(CommandHandler("unpair", self.cmd_unpair))
         dp.add_handler(CommandHandler("status", self.cmd_status))
         dp.add_handler(CommandHandler("stop", self.cmd_stop))
+        dp.add_handler(CommandHandler("tasks", self.cmd_tasks))
         dp.add_handler(MessageHandler(Filters.text & ~Filters.command, self.handle_message))
 
         logger.info("Starting Telegram bot...")
@@ -67,6 +68,8 @@ class CCClawBot:
             "/unpair - Disconnect your device\n"
             "/status - Check connection status\n"
             "/stop - Stop current session\n"
+            "/tasks - List scheduled tasks\n"
+            "/delay <min> <cmd> - Schedule a command\n"
             "/help - Show this help"
         )
 
@@ -79,6 +82,8 @@ class CCClawBot:
             "/unpair - Disconnect your device\n"
             "/status - Check connection status\n"
             "/stop - Stop current session\n"
+            "/tasks - List scheduled tasks\n"
+            "/delay <min> <cmd> - Schedule a command\n"
             "/help - Show this help"
         )
 
@@ -238,6 +243,51 @@ class CCClawBot:
         """Handle /stop command"""
         # TODO: Send stop signal to device
         update.message.reply_text("🛑 Stop command sent to device...")
+
+    def cmd_tasks(self, update: Update, context: CallbackContext):
+        """Handle /tasks command - list scheduled tasks"""
+        user = update.effective_user
+        telegram_id = user.id
+
+        from ..services.storage import storage
+        db_user = storage.get_user(telegram_id)
+
+        if not db_user:
+            update.message.reply_text(
+                "❌ No device paired.\n"
+                "Use /pair to connect your device."
+            )
+            return
+
+        device = storage.get_user_device(db_user["id"])
+
+        if not device:
+            update.message.reply_text(
+                "❌ No device paired.\n"
+                "Use /pair to connect your device."
+            )
+            return
+
+        # Check if device is online
+        status = simple_storage.get_device_status(device["id"])
+        if status != "online":
+            update.message.reply_text(
+                "🔴 Your device is offline.\n"
+                "Please make sure cc-claw is running on your device."
+            )
+            return
+
+        # Forward request to device
+        message_data = {
+            "chat_id": update.message.chat_id,
+            "user_id": user.id,
+            "content": "/tasks",
+            "message_id": str(update.message.message_id),
+        }
+        simple_storage.publish_message(device["id"], message_data)
+
+        # Send "processing" message
+        update.message.reply_text("⏳ Fetching tasks...")
 
     def stop(self):
         """Stop the bot"""

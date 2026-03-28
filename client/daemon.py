@@ -10,6 +10,7 @@ from .config import ClientConfig
 from .websocket import WebSocketManager
 from .claude import ClaudeExecutor
 from .handler import MessageHandler
+from .scheduler import TaskScheduler
 
 
 logging.basicConfig(
@@ -27,7 +28,9 @@ class CCClawDaemon:
         self.ws_manager: Optional[WebSocketManager] = None
         self.claude: Optional[ClaudeExecutor] = None
         self.handler: Optional[MessageHandler] = None
+        self.scheduler: Optional[TaskScheduler] = None
         self._running = False
+        self._task_checker_task: Optional[asyncio.Task] = None
 
     async def start(self):
         """Start the daemon"""
@@ -36,6 +39,10 @@ class CCClawDaemon:
             return
 
         logger.info("Starting CC-Claw daemon...")
+
+        # Initialize scheduler
+        self.scheduler = TaskScheduler()
+        logger.info("Task scheduler initialized")
 
         # Check Claude CLI availability
         self.claude = ClaudeExecutor(self.config)
@@ -54,11 +61,12 @@ class CCClawDaemon:
         # Initialize WebSocket
         self.ws_manager = WebSocketManager(self.config)
 
-        # Initialize handler
+        # Initialize handler with scheduler
         self.handler = MessageHandler(
             self.ws_manager,
             self.claude,
             self.config,
+            self.scheduler,
         )
 
         # Register message handlers
@@ -75,6 +83,9 @@ class CCClawDaemon:
                 # Start listening in background
                 asyncio.create_task(self.ws_manager.listen())
 
+                # Start task checker in background
+                self._task_checker_task = asyncio.create_task(self._task_checker())
+
                 # Keep running
                 while self._running:
                     await asyncio.sleep(1)
@@ -85,10 +96,55 @@ class CCClawDaemon:
             logger.error("Failed to connect to server")
             sys.exit(1)
 
+    async def _task_checker(self):
+        """Background task to check and execute due tasks"""
+        logger.info("Task checker started")
+        while self._running:
+            try:
+                due_tasks = self.scheduler.get_due_tasks()
+                for task in due_tasks:
+                    logger.info(f"Executing due task: {task.id[:8]}")
+                    asyncio.create_task(self._execute_task(task))
+                # Also cleanup old completed tasks
+                self.scheduler.remove_completed_tasks(older_than_hours=24)
+            except Exception as e:
+                logger.error(f"Error in task checker: {e}")
+
+            await asyncio.sleep(10)  # Check every 10 seconds
+
+    async def _execute_task(self, task):
+        """Execute a scheduled task"""
+        self.scheduler.mark_executing(task.id)
+
+        try:
+            logger.info(f"Executing scheduled task: {task.command}")
+
+            # Execute the command
+            response, images = await self.claude.execute(task.command)
+
+            # Format the response
+            result_msg = f"🔔 定时任务完成 [{task.id[:8]}]\n\n📋 命令:\n{task.command}\n\n📤 结果:\n{response}"
+
+            # Send result to server
+            await self.ws_manager.send_message(result_msg, task.original_message_id, images)
+
+            logger.info(f"Task {task.id[:8]} completed and result sent")
+
+        except Exception as e:
+            logger.error(f"Error executing task {task.id[:8]}: {e}")
+            error_msg = f"🔔 定时任务失败 [{task.id[:8]}]\n\n命令: {task.command}\n\n错误: {e}"
+            await self.ws_manager.send_message(error_msg, task.original_message_id, [])
+
+        finally:
+            self.scheduler.mark_completed(task.id)
+
     async def stop(self):
         """Stop the daemon"""
         logger.info("Stopping CC-Claw daemon...")
         self._running = False
+
+        if self._task_checker_task:
+            self._task_checker_task.cancel()
 
         if self.ws_manager:
             await self.ws_manager.disconnect()

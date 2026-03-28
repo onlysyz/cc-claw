@@ -7,6 +7,7 @@ from typing import Optional, Callable, Awaitable
 from .websocket import WebSocketManager, Message
 from .claude import ClaudeExecutor
 from .config import ClientConfig
+from .scheduler import TaskScheduler
 
 
 logger = logging.getLogger(__name__)
@@ -20,17 +21,20 @@ class MessageHandler:
         ws_manager: WebSocketManager,
         claude: ClaudeExecutor,
         config: ClientConfig,
+        scheduler: TaskScheduler,
         on_message_sent: Optional[Callable[[str], Awaitable[None]]] = None,
     ):
         self.ws = ws_manager
         self.claude = claude
         self.config = config
+        self.scheduler = scheduler
         self.on_message_sent = on_message_sent
 
         # Register handlers
         self.ws.on("message", self.handle_message)
         self.ws.on("error", self.handle_error)
         self.ws.on("delivered", self.handle_delivered)
+        self.ws.on("tasks", self.handle_tasks_request)
 
     async def handle_message(self, message: Message):
         """Handle incoming message from user"""
@@ -44,6 +48,16 @@ class MessageHandler:
             # Send acknowledgment first
             if message_id:
                 await self.ws.send_ack(message_id)
+
+            # Check for /delay command
+            if content.startswith("/delay "):
+                await self._handle_delay_command(content, message_id)
+                return
+
+            # Check for /tasks command
+            if content.strip() == "/tasks":
+                await self._handle_tasks_command(message_id)
+                return
 
             # Execute with Claude
             logger.info("Calling Claude executor...")
@@ -64,6 +78,47 @@ class MessageHandler:
                     await self.on_message_sent(message_id)
         except Exception as e:
             logger.error(f"Error in handle_message: {e}", exc_info=True)
+
+    async def _handle_delay_command(self, content: str, message_id: str):
+        """Handle /delay command"""
+        try:
+            parts = content.split(" ", 2)
+            if len(parts) < 3:
+                response = "❌ 用法: /delay <分钟> <命令>\n例如: /delay 5 测试部署"
+                await self.ws.send_message(response, message_id, [])
+                return
+
+            delay_minutes = int(parts[1])
+            command = parts[2]
+
+            if delay_minutes <= 0 or delay_minutes > 10080:  # Max 7 days
+                response = "❌ 延迟时间需在 1-10080 分钟之间"
+                await self.ws.send_message(response, message_id, [])
+                return
+
+            task_id = self.scheduler.add_task(command, delay_minutes, message_id)
+
+            response = f"✅ 已安排 {delay_minutes} 分钟后执行:\n{command}\n\n任务ID: {task_id[:8]}"
+            await self.ws.send_message(response, message_id, [])
+            logger.info(f"Scheduled task {task_id[:8]}: /delay {delay_minutes} {command}")
+        except ValueError:
+            response = "❌ 无效的延迟时间，请输入数字\n例如: /delay 5 测试部署"
+            await self.ws.send_message(response, message_id, [])
+        except Exception as e:
+            logger.error(f"Error handling delay command: {e}")
+            response = f"❌ 安排任务失败: {e}"
+            await self.ws.send_message(response, message_id, [])
+
+    async def _handle_tasks_command(self, message_id: str):
+        """Handle /tasks command"""
+        response = self.scheduler.format_tasks_list()
+        await self.ws.send_message(response, message_id, [])
+
+    async def handle_tasks_request(self, message: Message):
+        """Handle tasks list request from server"""
+        # This is triggered when server sends a tasks request
+        # But we handle /tasks directly in handle_message, so this is for future use
+        pass
 
     async def handle_error(self, message: Message):
         """Handle error message from server"""

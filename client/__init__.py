@@ -8,6 +8,7 @@ from .claude import ClaudeExecutor
 from .handler import MessageHandler, ToolExecutor
 from .daemon import CCClawDaemon
 from .api import APIClient
+from .scheduler import TaskScheduler, ScheduledTask
 
 __all__ = [
     "ClientConfig",
@@ -18,4 +19,6 @@ __all__ = [
     "ToolExecutor",
     "CCClawDaemon",
     "APIClient",
+    "TaskScheduler",
+    "ScheduledTask",
 ]
