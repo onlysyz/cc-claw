@@ -8,7 +8,7 @@ import sys
 import threading
 
 from server.config import config
-from server.bot import bot
+from server.bot import telegram_bot, lark_bot
 from server.ws import ws_server
 from server.api.main import app as api_app
 from server.services.tailscale import tailscale
@@ -75,8 +75,15 @@ async def main():
 
     # Start Telegram bot in a separate thread (it's blocking)
     logger.info("Starting Telegram bot in background...")
-    bot_thread = threading.Thread(target=bot.start, daemon=True)
+    bot_thread = threading.Thread(target=telegram_bot.start, daemon=True)
     bot_thread.start()
+
+    # Start Lark bot if configured
+    if config.lark_app_id and config.lark_app_secret:
+        logger.info("Starting Lark bot in background...")
+        lark_bot.start()
+    else:
+        logger.info("Lark bot not configured (set LARK_APP_ID and LARK_APP_SECRET)")
 
     # Keep the main thread alive
     logger.info("Server running. Press Ctrl+C to stop.")
@@ -88,7 +95,10 @@ async def shutdown():
     logger.info("Shutting down...")
 
     # Stop Telegram bot
-    bot.stop()
+    telegram_bot.stop()
+
+    # Stop Lark bot
+    lark_bot.stop()
 
     # Stop Tailscale
     await tailscale.stop()

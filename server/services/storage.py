@@ -64,11 +64,11 @@ class FileStorage:
             shutil.move(temp_file, filepath)
 
     # --- User Methods ---
-    def create_user(self, telegram_id: int, username: str = None, first_name: str = None) -> dict:
+    def create_user(self, telegram_id: int, username: str = None, first_name: str = None, lark_open_id: str = None) -> dict:
         """Create or get user"""
         users = self._read_json(self.users_file)
 
-        # Check if user exists
+        # Check if user exists by telegram_id
         for user in users.values():
             if user.get("telegram_id") == str(telegram_id):
                 return user
@@ -80,6 +80,7 @@ class FileStorage:
             "telegram_id": str(telegram_id),
             "username": username or "",
             "first_name": first_name or "",
+            "lark_open_id": lark_open_id or "",
             "created_at": datetime.utcnow().isoformat(),
         }
         users[user_id] = user_data
@@ -91,6 +92,16 @@ class FileStorage:
         users = self._read_json(self.users_file)
         for user in users.values():
             if user.get("telegram_id") == str(telegram_id):
+                return user
+        return None
+
+    def get_user_by_lark_open_id(self, lark_open_id: str) -> Optional[dict]:
+        """Get user by Lark open_id"""
+        if not lark_open_id:
+            return None
+        users = self._read_json(self.users_file)
+        for user in users.values():
+            if user.get("lark_open_id") == lark_open_id:
                 return user
         return None
 
@@ -321,6 +332,14 @@ class FileStorage:
         pairings = self._read_json(self.pairings_file)
         pairings.pop(code, None)
         self._write_json(self.pairings_file, pairings)
+
+    def update_user(self, user_id: str, **kwargs):
+        """Update user fields"""
+        users = self._read_json(self.users_file)
+        if user_id in users:
+            for key, value in kwargs.items():
+                users[user_id][key] = value
+            self._write_json(self.users_file, users)
 
 
 # Global storage instance

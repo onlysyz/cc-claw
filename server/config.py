@@ -33,6 +33,11 @@ class ServerConfig:
     # Tailscale
     tailscale_mode: str = "off"  # off | serve | funnel
 
+    # Lark (Feishu)
+    lark_app_id: str = ""
+    lark_app_secret: str = ""
+    lark_bot_name: str = "CC-Claw"
+
     @classmethod
     def from_env(cls) -> "ServerConfig":
         """Load config from environment variables"""
@@ -44,6 +49,9 @@ class ServerConfig:
             jwt_secret=os.getenv("JWT_SECRET", cls.jwt_secret),
             data_dir=os.getenv("DATA_DIR", cls.data_dir),
             tailscale_mode=os.getenv("TAILSCALE_MODE", "off"),
+            lark_app_id=os.getenv("LARK_APP_ID", ""),
+            lark_app_secret=os.getenv("LARK_APP_SECRET", ""),
+            lark_bot_name=os.getenv("LARK_BOT_NAME", cls.lark_bot_name),
         )
 
 

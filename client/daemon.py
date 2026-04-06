@@ -125,15 +125,15 @@ class CCClawDaemon:
             # Format the response
             result_msg = f"🔔 定时任务完成 [{task.id[:8]}]\n\n📋 命令:\n{task.command}\n\n📤 结果:\n{response}"
 
-            # Send result to server
-            await self.ws_manager.send_message(result_msg, task.original_message_id, images)
+            # Send result to server (with lark_open_id if present)
+            await self.ws_manager.send_message(result_msg, task.original_message_id, images, task.lark_open_id)
 
             logger.info(f"Task {task.id[:8]} completed and result sent")
 
         except Exception as e:
             logger.error(f"Error executing task {task.id[:8]}: {e}")
             error_msg = f"🔔 定时任务失败 [{task.id[:8]}]\n\n命令: {task.command}\n\n错误: {e}"
-            await self.ws_manager.send_message(error_msg, task.original_message_id, [])
+            await self.ws_manager.send_message(error_msg, task.original_message_id, [], task.lark_open_id)
 
         finally:
             self.scheduler.mark_completed(task.id)

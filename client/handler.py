@@ -42,6 +42,7 @@ class MessageHandler:
             message_id = message.message_id
             content = message.data.get("content", "")
             chat_id = message.data.get("chat_id")
+            lark_open_id = message.data.get("lark_open_id")  # Lark open_id if from Lark
 
             logger.info(f"Received message: {content[:50]}...")
 
@@ -51,12 +52,12 @@ class MessageHandler:
 
             # Check for /delay command
             if content.startswith("/delay "):
-                await self._handle_delay_command(content, message_id)
+                await self._handle_delay_command(content, message_id, lark_open_id)
                 return
 
             # Check for /tasks command
             if content.strip() == "/tasks":
-                await self._handle_tasks_command(message_id)
+                await self._handle_tasks_command(message_id, lark_open_id)
                 return
 
             # Execute with Claude
@@ -70,7 +71,7 @@ class MessageHandler:
             if message_id:
                 logger.info(f"Sending response back to server, message_id={message_id}")
                 success = await asyncio.wait_for(
-                    self.ws.send_message(response, message_id, images),
+                    self.ws.send_message(response, message_id, images, lark_open_id),
                     timeout=30
                 )
                 logger.info(f"Response sent: {success}")
@@ -79,13 +80,13 @@ class MessageHandler:
         except Exception as e:
             logger.error(f"Error in handle_message: {e}", exc_info=True)
 
-    async def _handle_delay_command(self, content: str, message_id: str):
+    async def _handle_delay_command(self, content: str, message_id: str, lark_open_id: str = None):
         """Handle /delay command"""
         try:
             parts = content.split(" ", 2)
             if len(parts) < 3:
                 response = "❌ 用法: /delay <分钟> <命令>\n例如: /delay 5 测试部署"
-                await self.ws.send_message(response, message_id, [])
+                await self.ws.send_message(response, message_id, [], lark_open_id)
                 return
 
             delay_minutes = int(parts[1])
@@ -93,26 +94,26 @@ class MessageHandler:
 
             if delay_minutes <= 0 or delay_minutes > 10080:  # Max 7 days
                 response = "❌ 延迟时间需在 1-10080 分钟之间"
-                await self.ws.send_message(response, message_id, [])
+                await self.ws.send_message(response, message_id, [], lark_open_id)
                 return
 
-            task_id = self.scheduler.add_task(command, delay_minutes, message_id)
+            task_id = self.scheduler.add_task(command, delay_minutes, message_id, lark_open_id)
 
             response = f"✅ 已安排 {delay_minutes} 分钟后执行:\n{command}\n\n任务ID: {task_id[:8]}"
-            await self.ws.send_message(response, message_id, [])
+            await self.ws.send_message(response, message_id, [], lark_open_id)
             logger.info(f"Scheduled task {task_id[:8]}: /delay {delay_minutes} {command}")
         except ValueError:
             response = "❌ 无效的延迟时间，请输入数字\n例如: /delay 5 测试部署"
-            await self.ws.send_message(response, message_id, [])
+            await self.ws.send_message(response, message_id, [], lark_open_id)
         except Exception as e:
             logger.error(f"Error handling delay command: {e}")
             response = f"❌ 安排任务失败: {e}"
-            await self.ws.send_message(response, message_id, [])
+            await self.ws.send_message(response, message_id, [], lark_open_id)
 
-    async def _handle_tasks_command(self, message_id: str):
+    async def _handle_tasks_command(self, message_id: str, lark_open_id: str = None):
         """Handle /tasks command"""
         response = self.scheduler.format_tasks_list()
-        await self.ws.send_message(response, message_id, [])
+        await self.ws.send_message(response, message_id, [], lark_open_id)
 
     async def handle_tasks_request(self, message: Message):
         """Handle tasks list request from server"""

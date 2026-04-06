@@ -25,6 +25,7 @@ class Client:
     websocket: WebSocketServerProtocol
     device_id: str
     user_id: Optional[int] = None
+    lark_open_id: Optional[str] = None  # Lark open_id for routing responses
 
     def __hash__(self):
         return hash(self.device_id)
@@ -142,16 +143,19 @@ class WebSocketServer:
             # Get device and user info
             device = storage.get_device(device_id)
             user_id = None
+            lark_open_id = None
             if device:
                 user = storage.get_user_by_id(device.get("user_id"))
                 if user:
                     user_id = int(user["telegram_id"])
+                    lark_open_id = user.get("lark_open_id")
 
             # Create client
             client = Client(
                 websocket=websocket,
                 device_id=device_id,
                 user_id=user_id,
+                lark_open_id=lark_open_id,
             )
 
             # Add to clients
@@ -225,19 +229,37 @@ class WebSocketServer:
             logger.info(f"Received message from device: type={msg_type}, data={str(data)[:100]}")
 
             if msg_type == "message":
-                # Forward message response to Telegram user
+                # Forward message response to user (Telegram or Lark)
                 content = data.get("content", "")
                 message_id = data.get("message_id")
                 images = data.get("images", [])
+                lark_open_id = data.get("lark_open_id")  # Check if this is a Lark message
 
-                logger.info(f"Sending response to Telegram user {client.user_id}: {content[:50]}...")
+                # Determine routing: use lark_open_id if present, otherwise use client.user_id (Telegram)
+                routing_id = lark_open_id or client.user_id
+                is_lark = bool(lark_open_id)
 
-                if client.user_id:
+                logger.info(f"Sending response to {'Lark' if is_lark else 'Telegram'} user {routing_id}: {content[:50]}...")
+
+                if is_lark and lark_open_id:
+                    # Send to Lark
+                    from ..bot import send_lark_message
+                    if images:
+                        logger.warning(f"Lark image sending not yet implemented")
+                    if content:
+                        if len(content) > 4000:
+                            chunks = [content[i:i+4000] for i in range(0, len(content), 4000)]
+                            for chunk in chunks:
+                                send_lark_message(lark_open_id, chunk)
+                        else:
+                            send_lark_message(lark_open_id, content)
+                    logger.info("Message sent to Lark")
+                elif client.user_id:
                     # Send images first if any
                     for img_path in images:
                         try:
-                            from ..bot import send_photo
-                            send_photo(client.user_id, img_path)
+                            from ..bot import tg_send_photo
+                            tg_send_photo(client.user_id, img_path)
                             logger.info(f"Sent image: {img_path}")
                         except Exception as e:
                             logger.error(f"Failed to send image {img_path}: {e}")
@@ -250,7 +272,7 @@ class WebSocketServer:
                     elif content:
                         await self._send_to_telegram(client.user_id, content)
 
-                logger.info("Message sent to Telegram")
+                    logger.info("Message sent to Telegram")
 
             elif msg_type == "ack":
                 # Message acknowledged

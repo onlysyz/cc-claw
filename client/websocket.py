@@ -79,7 +79,7 @@ class WebSocketManager:
             logger.error(f"Failed to send message: {e}")
             return False
 
-    async def send_message(self, content: str, message_id: str, images: list[str] = None) -> bool:
+    async def send_message(self, content: str, message_id: str, images: list[str] = None, lark_open_id: str = None) -> bool:
         """Send a chat message to server (response)"""
         data = {
             "type": "message",
@@ -88,8 +88,10 @@ class WebSocketManager:
         }
         if images:
             data["images"] = images
+        if lark_open_id:
+            data["lark_open_id"] = lark_open_id
         import logging
-        logging.getLogger(__name__).info(f"Sending data with images: {images}")
+        logging.getLogger(__name__).info(f"Sending data with images: {images}, lark_open_id: {lark_open_id}")
         return await self.send(data)
 
     async def send_ack(self, message_id: str) -> bool:

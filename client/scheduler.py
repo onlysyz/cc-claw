@@ -19,6 +19,7 @@ class ScheduledTask:
     execute_at: str
     status: str  # pending, executing, completed, cancelled
     original_message_id: Optional[str] = None
+    lark_open_id: Optional[str] = None  # Lark open_id for routing response
 
     @classmethod
     def from_dict(cls, data: dict) -> "ScheduledTask":
@@ -63,7 +64,7 @@ class TaskScheduler:
             json.dump({"tasks": [asdict(t) for t in self.tasks]}, f, indent=2)
         temp_path.rename(path)
 
-    def add_task(self, command: str, delay_minutes: int, original_message_id: Optional[str] = None) -> str:
+    def add_task(self, command: str, delay_minutes: int, original_message_id: Optional[str] = None, lark_open_id: Optional[str] = None) -> str:
         """Add a new scheduled task"""
         task_id = str(uuid.uuid4())[:8]
         now = datetime.now()
@@ -77,6 +78,7 @@ class TaskScheduler:
             execute_at=execute_at.isoformat(),
             status="pending",
             original_message_id=original_message_id,
+            lark_open_id=lark_open_id,
         )
 
         self.tasks.append(task)
