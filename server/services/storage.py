@@ -105,6 +105,29 @@ class FileStorage:
                 return user
         return None
 
+    def get_or_create_user_by_lark(self, lark_open_id: str, username: str = None, first_name: str = None) -> dict:
+        """Get existing user by Lark open_id or create new one"""
+        users = self._read_json(self.users_file)
+
+        # Check if user exists by lark_open_id
+        for user in users.values():
+            if user.get("lark_open_id") == lark_open_id:
+                return user
+
+        # Create new user
+        user_id = str(uuid.uuid4())
+        user_data = {
+            "id": user_id,
+            "telegram_id": "",  # Will be filled if they also use Telegram
+            "username": username or "",
+            "first_name": first_name or "",
+            "lark_open_id": lark_open_id,
+            "created_at": datetime.utcnow().isoformat(),
+        }
+        users[user_id] = user_data
+        self._write_json(self.users_file, users)
+        return user_data
+
     def get_user_by_id(self, user_id: str) -> Optional[dict]:
         """Get user by ID"""
         users = self._read_json(self.users_file)
