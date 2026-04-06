@@ -1,33 +1,35 @@
 # CC-Claw
 
-Telegram bot to remotely control Claude Code CLI.
+Remotely control Claude Code CLI through Telegram or Lark (Feishu).
 
 ## What is CC-Claw?
 
-CC-Claw is a gateway service that allows you to control your local Claude Code CLI through a Telegram bot. Send messages from your phone via Telegram, and CC-Claw forwards them to your local machine, executes them with Claude Code, and returns the results.
+CC-Claw is a gateway service that allows you to control your local Claude Code CLI through messaging bots. Send messages from Telegram or Lark, and CC-Claw forwards them to your local machine, executes them with Claude Code, and returns the results.
 
 ## Architecture
 
 ```
-Telegram User → Telegram Bot → Cloud Server → Local Gateway → Claude Code CLI
-                    ↑                                    ↓
-                    └──────────── Response ←─────────────┘
+Telegram/Lark User → Bot → Cloud Server → Local Gateway → Claude Code CLI
+                        ↑                              ↓
+                        └────────── Response ←─────────┘
 ```
 
 ## Features
 
 - 🔗 **Simple Pairing** - Connect your device with a 6-digit code
 - 🔒 **Secure** - WebSocket with authentication and token-based access
-- 💬 **Multi-device** - Support multiple devices per user
+- 💬 **Multi-platform** - Support both Telegram and Lark (Feishu)
 - 🛠️ **Full Claude Code** - Execute any Claude Code command remotely
 - 🔄 **Session Continuity** - Uses `--continue` flag for conversation context
 - ⚡ **Permissions Bypass** - Skip permission prompts for automation
+- ⏰ **Scheduled Tasks** - Delay command execution with `/delay` command
 
 ## Prerequisites
 
 ### Server
 - Python 3.10+
-- Telegram Bot Token (get from @BotFather)
+- Telegram Bot Token (get from @BotFather) - for Telegram support
+- Lark App ID & Secret (get from [Feishu Open Platform](https://open.feishu.cn/)) - for Lark support
 - (Optional) Domain with SSL for production
 
 ### Client
@@ -161,7 +163,7 @@ cc-claw unpair
 - `default` - Ask for permissions when needed
 - `bypassPermissions` - Skip all permission prompts (recommended for automation)
 
-### Server Commands (Telegram)
+### Server Commands (Telegram/Lark)
 
 | Command | Description |
 |---------|-------------|
@@ -169,6 +171,8 @@ cc-claw unpair
 | `/pair` | Start pairing process |
 | `/unpair` | Unpair device |
 | `/status` | Check connection status |
+| `/tasks` | List scheduled tasks |
+| `/delay <min> <cmd>` | Schedule a command to run after N minutes |
 | `/help` | Help information |
 
 ## Development
@@ -183,11 +187,12 @@ cc-claw/
 │   ├── config.py       # Configuration
 │   ├── daemon.py       # Daemon process
 │   ├── handler.py      # Message handler
-│   └── websocket.py    # WebSocket manager
+│   ├── scheduler.py     # Task scheduler
+│   └── websocket.py     # WebSocket manager
 ├── server/             # Server package
 │   ├── api/           # REST API
-│   ├── bot/           # Telegram bot
-│   ├── services/      # Storage, Redis
+│   ├── bot/           # Telegram & Lark bots
+│   ├── services/      # Storage
 │   └── ws/            # WebSocket server
 ├── cli.py              # Client CLI
 └── run_server.py       # Server entry point
@@ -213,7 +218,7 @@ cc-claw start
 
 ## Tech Stack
 
-- **Server**: Python, Telegram Bot API, WebSocket, FastAPI
+- **Server**: Python, Telegram Bot API, Lark API, WebSocket, FastAPI
 - **Client**: Python, WebSocket Client, Claude Code CLI
 
 ## License
