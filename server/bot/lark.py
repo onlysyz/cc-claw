@@ -275,7 +275,12 @@ class LarkBot:
             device = storage.get_user_device(user["id"])
             if device:
                 storage.delete_device(device["id"])
-                simple_storage.delete_user_device(int(user.get("telegram_id", 0)))
+                # Delete user-device mapping (handle both Telegram and Lark users)
+                telegram_id = user.get("telegram_id")
+                if telegram_id:
+                    simple_storage.delete_user_device(int(telegram_id))
+                else:
+                    simple_storage.delete_user_device_by_lark(open_id)
                 self._send_lark_message(open_id, "✅ 设备已解绑！")
             else:
                 self._send_lark_message(open_id, "❌ 您没有配对过设备。")
