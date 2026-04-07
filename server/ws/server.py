@@ -61,16 +61,20 @@ class WebSocketServer:
             await self.server.wait_closed()
         logger.info("WebSocket server stopped")
 
-    async def handle_connection(self, websocket: WebSocketServerProtocol, path: str):
+    async def handle_connection(self, websocket: WebSocketServerProtocol, path: str = None):
         """Handle new WebSocket connection"""
         logger.info(f"New connection from {websocket.remote_address}, path: {path}")
         client: Optional[Client] = None
 
         try:
             # Try to get token and device_id from query string first
-            query = parse_qs(urlparse(path).query)
-            query_token = query.get("token", [None])[0]
-            query_device_id = query.get("device_id", [None])[0]
+            if path:
+                query = parse_qs(urlparse(path).query)
+                query_token = query.get("token", [None])[0]
+                query_device_id = query.get("device_id", [None])[0]
+            else:
+                query_token = None
+                query_device_id = None
 
             # Wait for registration message
             try:
@@ -147,7 +151,9 @@ class WebSocketServer:
             if device:
                 user = storage.get_user_by_id(device.get("user_id"))
                 if user:
-                    user_id = int(user["telegram_id"])
+                    telegram_id = user.get("telegram_id")
+                    if telegram_id:
+                        user_id = int(telegram_id)
                     lark_open_id = user.get("lark_open_id")
 
             # Create client
