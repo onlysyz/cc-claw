@@ -5,7 +5,7 @@ import json
 import logging
 import os
 import subprocess
-from typing import Optional
+from typing import Optional, Tuple, List
 
 from .config import ClientConfig
 
@@ -28,7 +28,7 @@ class ClaudeExecutor:
                 env.pop(key, None)
         return env
 
-    async def execute(self, prompt: str) -> tuple[str, list[str]]:
+    async def execute(self, prompt: str) -> Tuple[str, List[str]]:
         """Execute a prompt using --print mode with JSON output
         Returns: (text_response, list_of_image_paths)
         """

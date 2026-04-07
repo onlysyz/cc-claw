@@ -5,7 +5,7 @@ import os
 import uuid
 import threading
 from datetime import datetime, timedelta
-from typing import Optional, Dict
+from typing import Optional, Dict, Tuple
 import secrets
 import string
 import shutil
@@ -211,7 +211,7 @@ class FileStorage:
         self._write_json(self.devices_file, devices)
 
     # --- Token Methods ---
-    def create_token(self, device_id: str) -> tuple[str, str]:
+    def create_token(self, device_id: str) -> Tuple[str, str]:
         """Create a new device token"""
         tokens = self._read_json(self.tokens_file)
 
@@ -278,7 +278,7 @@ class FileStorage:
             if code not in pairings:
                 return code
 
-    def create_pairing(self, user_id: str) -> tuple[str, str]:
+    def create_pairing(self, user_id: str) -> Tuple[str, str]:
         """Create a new pairing code"""
         pairings = self._read_json(self.pairings_file)
 
