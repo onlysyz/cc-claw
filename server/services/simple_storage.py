@@ -14,6 +14,7 @@ class SimpleStorage:
         self._lock = threading.RLock()
         self._device_status: Dict[str, str] = {}  # device_id -> status
         self._user_device: Dict[int, str] = {}  # telegram_id -> device_id
+        self._lark_user_device: Dict[str, str] = {}  # lark_open_id -> device_id
         self._ws_connections: Dict[str, Set[str]] = {}  # device_id -> set of ws_ids
         self._message_queue: Dict[str, list] = {}  # device_id -> messages
 
@@ -46,6 +47,21 @@ class SimpleStorage:
         """Delete user-device mapping"""
         with self._lock:
             self._user_device.pop(user_id, None)
+
+    # --- Lark User-Device Mapping ---
+    def set_user_device_by_lark(self, lark_open_id: str, device_id: str):
+        """Map Lark user to device"""
+        with self._lock:
+            self._lark_user_device[lark_open_id] = device_id
+
+    def get_user_device_by_lark(self, lark_open_id: str) -> Optional[str]:
+        """Get Lark user's device"""
+        return self._lark_user_device.get(lark_open_id)
+
+    def delete_user_device_by_lark(self, lark_open_id: str):
+        """Delete Lark user-device mapping"""
+        with self._lock:
+            self._lark_user_device.pop(lark_open_id, None)
 
     # --- WebSocket Connections ---
     def add_ws_connection(self, device_id: str, ws_id: str):
@@ -117,6 +133,15 @@ class RedisService:
 
     def delete_user_device(self, user_id: int):
         simple_storage.delete_user_device(user_id)
+
+    def set_user_device_by_lark(self, lark_open_id: str, device_id: str):
+        simple_storage.set_user_device_by_lark(lark_open_id, device_id)
+
+    def get_user_device_by_lark(self, lark_open_id: str) -> Optional[str]:
+        return simple_storage.get_user_device_by_lark(lark_open_id)
+
+    def delete_user_device_by_lark(self, lark_open_id: str):
+        simple_storage.delete_user_device_by_lark(lark_open_id)
 
     def add_ws_connection(self, device_id: str, ws_id: str):
         simple_storage.add_ws_connection(device_id, ws_id)

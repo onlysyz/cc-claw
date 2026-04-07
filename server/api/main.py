@@ -10,7 +10,7 @@ from pydantic import BaseModel
 
 from ..config import config
 from ..services.storage import init_storage
-from ..services.redis import simple_storage
+from ..services.simple_storage import simple_storage
 
 
 logger = logging.getLogger(__name__)
@@ -160,7 +160,15 @@ async def complete_pairing(request: PairingCompleteRequest):
     storage.add_token(device_token, device_id, expires_at)
 
     # Update user to device mapping in simple_storage
-    simple_storage.set_user_device(int(user["telegram_id"]), device["id"])
+    # For Lark users, telegram_id might be empty, so we use user_id directly
+    telegram_id = user.get("telegram_id")
+    if telegram_id:
+        simple_storage.set_user_device(int(telegram_id), device["id"])
+    else:
+        # For Lark users, use lark_open_id as the key
+        lark_open_id = user.get("lark_open_id")
+        if lark_open_id:
+            simple_storage.set_user_device_by_lark(lark_open_id, device["id"])
 
     # Return device info and token
     return DeviceResponse(

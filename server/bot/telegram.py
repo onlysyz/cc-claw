@@ -9,7 +9,7 @@ from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, Callb
 
 from ..config import config
 from ..services.storage import init_storage
-from ..services.redis import simple_storage
+from ..services.simple_storage import simple_storage
 
 
 logger = logging.getLogger(__name__)

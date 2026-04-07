@@ -3,16 +3,15 @@
 import json
 import logging
 import threading
+import time
 from typing import Optional
 
-from lark_oapi.adapter.websocket import WebSocketClient
-from lark_oapi.event.dispatch import EventDispatcher
-from lark_oapi.api.im.v1 import P2ImMessageReceiveV1
-from lark_oapi import Lark
+from lark_oapi.event.dispatcher_handler import EventDispatcherHandler
+from lark_oapi.ws.client import Client as WSClient
 
 from ..config import config
 from ..services.storage import init_storage
-from ..services.redis import simple_storage
+from ..services.simple_storage import simple_storage
 
 logger = logging.getLogger(__name__)
 
@@ -21,9 +20,10 @@ class LarkBot:
     """Lark Bot for CC-Claw using WebSocket mode"""
 
     def __init__(self):
-        self.ws_client: Optional[WebSocketClient] = None
-        self.lark_client: Optional[Lark] = None
+        self.ws_client: Optional[WSClient] = None
         self._running = False
+        self._tenant_access_token: Optional[str] = None
+        self._token_expires_at: float = 0
 
     def start(self):
         """Start the Lark bot in a background thread"""
@@ -34,16 +34,9 @@ class LarkBot:
         # Initialize storage
         init_storage()
 
-        # Create Lark API client for sending messages
-        self.lark_client = Lark(
-            app_id=config.lark_app_id,
-            app_secret=config.lark_app_secret,
-            enable_db=False,
-        )
-
         logger.info("Starting Lark bot in background...")
 
-        # Run in a separate thread since WebSocketClient.start() is blocking
+        # Run in a separate thread since ws_client.start() is blocking
         self._running = True
         thread = threading.Thread(target=self._run_ws_client, daemon=True)
         thread.start()
@@ -51,17 +44,22 @@ class LarkBot:
     def _run_ws_client(self):
         """Run the WebSocket client (blocking)"""
         try:
-            # Create event dispatcher
-            dispatcher = EventDispatcher.create(self._handle_event)
+            from lark_oapi.api.im.v1.model.p2_im_message_receive_v1 import P2ImMessageReceiveV1
 
-            # Create WebSocket client
-            self.ws_client = WebSocketClient(
+            def handle_event(event: P2ImMessageReceiveV1):
+                self._handle_message(event)
+
+            handler = (EventDispatcherHandler
+                .builder('', '')
+                .register_p2_im_message_receive_v1(handle_event)
+                .build())
+
+            self.ws_client = WSClient(
                 config.lark_app_id,
                 config.lark_app_secret,
-                event_dispatcher=dispatcher,
+                event_handler=handler,
             )
 
-            # Start WebSocket connection
             logger.info("Connecting to Lark WebSocket...")
             self.ws_client.start()
 
@@ -69,33 +67,84 @@ class LarkBot:
             logger.error(f"Lark WebSocket error: {e}", exc_info=True)
             self._running = False
 
-    def _handle_event(self, event):
-        """Handle incoming Lark events"""
-        try:
-            # Handle message receive events
-            if isinstance(event, P2ImMessageReceiveV1):
-                self._handle_message(event)
-            else:
-                logger.info(f"Received unknown event type: {type(event)}")
-        except Exception as e:
-            logger.error(f"Error handling Lark event: {e}", exc_info=True)
+    def _get_tenant_access_token(self) -> Optional[str]:
+        """Get or refresh tenant access token"""
+        # Check if current token is still valid
+        if self._tenant_access_token and time.time() < self._token_expires_at - 60:
+            return self._tenant_access_token
 
-    def _handle_message(self, event: P2ImMessageReceiveV1):
+        try:
+            import requests
+            url = "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal"
+            headers = {"Content-Type": "application/json"}
+            data = {
+                "app_id": config.lark_app_id,
+                "app_secret": config.lark_app_secret
+            }
+
+            resp = requests.post(url, headers=headers, json=data, timeout=10)
+            result = resp.json()
+
+            if result.get("code") == 0:
+                self._tenant_access_token = result.get("tenant_access_token")
+                self._token_expires_at = time.time() + result.get("expire", 7200)
+                return self._tenant_access_token
+            else:
+                logger.error(f"Failed to get tenant access token: {result}")
+                return None
+
+        except Exception as e:
+            logger.error(f"Error getting tenant access token: {e}")
+            return None
+
+    def _send_lark_message(self, open_id: str, text: str):
+        """Send message to a Lark user via REST API"""
+        token = self._get_tenant_access_token()
+        if not token:
+            logger.error("No tenant access token available")
+            return
+
+        try:
+            import requests
+            url = "https://open.feishu.cn/open-apis/im/v1/messages"
+            headers = {
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {token}"
+            }
+            params = {"receive_id_type": "open_id"}
+            data = {
+                "receive_id": open_id,
+                "msg_type": "text",
+                "content": json.dumps({"text": text})
+            }
+
+            resp = requests.post(url, headers=headers, params=params, json=data, timeout=10)
+            result = resp.json()
+
+            if result.get("code") == 0:
+                logger.info(f"Lark message sent to {open_id}: {text[:50]}...")
+            else:
+                logger.error(f"Failed to send Lark message: {result}")
+
+        except Exception as e:
+            logger.error(f"Error sending Lark message: {e}")
+
+    def _handle_message(self, event):
         """Handle incoming message from Lark"""
         try:
-            # Extract message content
-            sender = event.event.message.sender
+            # Extract message and sender
+            sender = event.event.sender
             message = event.event.message
 
-            # Only handle text messages from user (not bot)
+            # Only handle text messages
             if message.message_type != "text":
                 logger.info(f"Ignoring non-text message type: {message.message_type}")
                 return
 
             # Get sender info
             sender_id = sender.sender_id
-            if sender_id.id_type != "open_id":
-                logger.info(f"Ignoring non-open_id sender type: {sender_id.id_type}")
+            if sender.sender_type != "user":
+                logger.info(f"Ignoring non-user sender type: {sender.sender_type}")
                 return
 
             open_id = sender_id.open_id
@@ -310,33 +359,6 @@ class LarkBot:
         self._send_lark_message(open_id,
             "❌ 未知命令。\n\n发送 /help 查看可用命令。"
         )
-
-    def _send_lark_message(self, open_id: str, text: str):
-        """Send message to a Lark user via REST API"""
-        if not self.lark_client:
-            logger.warning("Lark client not initialized")
-            return
-
-        try:
-            from lark_oapi.api.im.v1 import CreateMessageRequest
-
-            # Build the request
-            request = CreateMessageRequest.builder().build()
-            request.receive_id = open_id
-            request.receive_id_type = "open_id"
-            request.msg_type = "text"
-            request.content = json.dumps({"text": text})
-
-            # Send the message
-            response = self.lark_client.im.v1.message.create(request)
-
-            if response.code == 0:
-                logger.info(f"Lark message sent to {open_id}: {text[:50]}...")
-            else:
-                logger.error(f"Failed to send Lark message: {response.code} - {response.msg}")
-
-        except Exception as e:
-            logger.error(f"Error sending Lark message: {e}")
 
     def send_message_to_lark_user(self, open_id: str, text: str):
         """Send message to a Lark user (called from other parts of the server)"""
