@@ -82,6 +82,8 @@ class FileStorage:
             "first_name": first_name or "",
             "lark_open_id": lark_open_id or "",
             "created_at": datetime.utcnow().isoformat(),
+            "onboarding_state": "pending",  # pending | profession | situation | goal | better | complete
+            "onboarding_data": {},  # collected answers
         }
         users[user_id] = user_data
         self._write_json(self.users_file, users)
@@ -362,6 +364,23 @@ class FileStorage:
         if user_id in users:
             for key, value in kwargs.items():
                 users[user_id][key] = value
+            self._write_json(self.users_file, users)
+
+    def get_onboarding_state(self, user_id: str) -> Tuple[str, dict]:
+        """Get onboarding state and collected data for user"""
+        users = self._read_json(self.users_file)
+        user = users.get(user_id)
+        if not user:
+            return "pending", {}
+        return user.get("onboarding_state", "pending"), user.get("onboarding_data", {})
+
+    def set_onboarding_state(self, user_id: str, state: str, data: dict = None):
+        """Update onboarding state and data"""
+        users = self._read_json(self.users_file)
+        if user_id in users:
+            users[user_id]["onboarding_state"] = state
+            if data is not None:
+                users[user_id]["onboarding_data"] = data
             self._write_json(self.users_file, users)
 
 

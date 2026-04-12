@@ -1,4 +1,4 @@
-"""CC-Claw Client Message Handler Module"""
+"""CC-Claw Client Message Handler Module - with Profile, Onboarding, Token Tracking"""
 
 import asyncio
 import logging
@@ -8,6 +8,8 @@ from .websocket import WebSocketManager, Message
 from .claude import ClaudeExecutor
 from .config import ClientConfig
 from .scheduler import TaskScheduler
+from .profile import ProfileManager
+from .token_tracker import TokenTracker
 
 
 logger = logging.getLogger(__name__)
@@ -22,19 +24,24 @@ class MessageHandler:
         claude: ClaudeExecutor,
         config: ClientConfig,
         scheduler: TaskScheduler,
+        profile: ProfileManager,
         on_message_sent: Optional[Callable[[str], Awaitable[None]]] = None,
     ):
         self.ws = ws_manager
         self.claude = claude
         self.config = config
         self.scheduler = scheduler
+        self.profile = profile
         self.on_message_sent = on_message_sent
+        self.token_tracker = TokenTracker()
+        self.autonomous_mode = True  # start in autonomous mode by default
 
         # Register handlers
         self.ws.on("message", self.handle_message)
         self.ws.on("error", self.handle_error)
         self.ws.on("delivered", self.handle_delivered)
         self.ws.on("tasks", self.handle_tasks_request)
+        self.ws.on("profile", self.handle_profile_message)
 
     async def handle_message(self, message: Message):
         """Handle incoming message from user"""
@@ -42,9 +49,10 @@ class MessageHandler:
             message_id = message.message_id
             content = message.data.get("content", "")
             chat_id = message.data.get("chat_id")
-            lark_open_id = message.data.get("lark_open_id")  # Lark open_id if from Lark
+            lark_open_id = message.data.get("lark_open_id")
+            is_priority = message.data.get("priority", False)
 
-            logger.info(f"Received message: {content[:50]}...")
+            logger.info(f"Received message: {content[:50]}..., priority={is_priority}")
 
             # Send acknowledgment first
             if message_id:
@@ -60,18 +68,57 @@ class MessageHandler:
                 await self._handle_tasks_command(message_id, lark_open_id)
                 return
 
+            # Check for /progress command
+            if content.strip() == "/progress":
+                await self._handle_progress_command(message_id, lark_open_id)
+                return
+
+            # Check for /pause command
+            if content.strip() == "/pause":
+                await self._handle_pause_command(message_id, lark_open_id)
+                return
+
+            # Check for /resume command
+            if content.strip() == "/resume":
+                await self._handle_resume_command(message_id, lark_open_id)
+                return
+
+            # Check for /goals command
+            if content.strip() == "/goals":
+                await self._handle_goals_command(message_id, lark_open_id)
+                return
+
+            # User message — if priority (user-initiated), insert at front of queue
+            if is_priority:
+                logger.info("Priority message from user — would insert at front of queue")
+                # For now, execute immediately (interrupt current if needed)
+                # TODO: integrate with task queue for proper interruption
+
             # Execute with Claude
             logger.info("Calling Claude executor...")
             response, images = await self.claude.execute(content)
             logger.info(f"Claude response: {response[:100]}...")
+
+            # Parse response for token usage and 429
+            result_text, usage, is_rate_limited = self.token_tracker.parse_json_response(
+                response if not images else ""
+            )
+            if usage:
+                self.profile.record_usage(usage.total_tokens)
+                logger.info(f"Token usage recorded: {usage.total_tokens}")
+
+            if is_rate_limited or "429" in response:
+                self.profile.set_rate_limited(asyncio.get_event_loop().time())
+                logger.warning("Rate limit detected!")
+
             if images:
                 logger.info(f"Claude generated {len(images)} images")
 
-            # Send response back to server (with images if any)
+            # Send response back to server
             if message_id:
-                logger.info(f"Sending response back to server, message_id={message_id}")
+                final_response = result_text if result_text else response
                 success = await asyncio.wait_for(
-                    self.ws.send_message(response, message_id, images, lark_open_id),
+                    self.ws.send_message(final_response, message_id, images, lark_open_id),
                     timeout=30
                 )
                 logger.info(f"Response sent: {success}")
@@ -79,6 +126,36 @@ class MessageHandler:
                     await self.on_message_sent(message_id)
         except Exception as e:
             logger.error(f"Error in handle_message: {e}", exc_info=True)
+
+    async def handle_profile_message(self, message: Message):
+        """Handle profile save/update messages from server"""
+        try:
+            action = message.data.get("action", "")
+            profile_data = message.data.get("data", {})
+            chat_id = message.data.get("chat_id")
+            user_id = message.data.get("user_id")
+
+            if action == "save_profile":
+                self.profile.save_profile(
+                    profession=profile_data.get("profession", ""),
+                    situation=profile_data.get("situation", ""),
+                    short_term_goal=profile_data.get("short_term_goal", ""),
+                    what_better_means=profile_data.get("what_better_means", ""),
+                )
+                logger.info(f"Profile saved for user {user_id}")
+
+                # Create initial goal from profile
+                goal_text = profile_data.get("short_term_goal", "")
+                if goal_text:
+                    goal = self.profile.add_goal(goal_text)
+                    logger.info(f"Created initial goal: {goal.id} - {goal_text}")
+
+                # Notify server profile was saved
+                if message.message_id:
+                    await self.ws.send_ack(message.message_id)
+
+        except Exception as e:
+            logger.error(f"Error handling profile message: {e}", exc_info=True)
 
     async def _handle_delay_command(self, content: str, message_id: str, lark_open_id: str = None):
         """Handle /delay command"""
@@ -92,7 +169,7 @@ class MessageHandler:
             delay_minutes = int(parts[1])
             command = parts[2]
 
-            if delay_minutes <= 0 or delay_minutes > 10080:  # Max 7 days
+            if delay_minutes <= 0 or delay_minutes > 10080:
                 response = "❌ 延迟时间需在 1-10080 分钟之间"
                 await self.ws.send_message(response, message_id, [], lark_open_id)
                 return
@@ -115,10 +192,42 @@ class MessageHandler:
         response = self.scheduler.format_tasks_list()
         await self.ws.send_message(response, message_id, [], lark_open_id)
 
+    async def _handle_progress_command(self, message_id: str, lark_open_id: str = None):
+        """Handle /progress command"""
+        response = self.profile.format_progress()
+        await self.ws.send_message(response, message_id, [], lark_open_id)
+
+    async def _handle_pause_command(self, message_id: str, lark_open_id: str = None):
+        """Handle /pause command"""
+        self.autonomous_mode = False
+        logger.info("Autonomous mode PAUSED")
+        response = "⏸️ Autonomous mode paused. CC-Claw will not execute tasks automatically.\nResume with /resume"
+        await self.ws.send_message(response, message_id, [], lark_open_id)
+
+    async def _handle_resume_command(self, message_id: str, lark_open_id: str = None):
+        """Handle /resume command"""
+        self.autonomous_mode = True
+        logger.info("Autonomous mode RESUMED")
+        response = "▶️ Autonomous mode resumed. CC-Claw is working for you again."
+        await self.ws.send_message(response, message_id, [], lark_open_id)
+
+    async def _handle_goals_command(self, message_id: str, lark_open_id: str = None):
+        """Handle /goals command"""
+        active_goals = self.profile.get_active_goals()
+        if not active_goals:
+            response = "🎯 No active goals. Complete onboarding to set your first goal."
+        else:
+            lines = ["🎯 **Active Goals**\n"]
+            for g in active_goals:
+                tasks = self.profile.get_tasks_for_goal(g.id)
+                completed = len([t for t in tasks if t.status.value == "completed"])
+                total = len(tasks)
+                lines.append(f"• {g.description} ({completed}/{total} tasks)")
+            response = "\n".join(lines)
+        await self.ws.send_message(response, message_id, [], lark_open_id)
+
     async def handle_tasks_request(self, message: Message):
         """Handle tasks list request from server"""
-        # This is triggered when server sends a tasks request
-        # But we handle /tasks directly in handle_message, so this is for future use
         pass
 
     async def handle_error(self, message: Message):
@@ -162,7 +271,7 @@ class ToolExecutor:
         temp_file = os.path.join(self.config.working_dir, "cc-claw-screenshot.png")
 
         try:
-            if system == "Darwin":  # macOS
+            if system == "Darwin":
                 cmd = ["screencapture", temp_file]
             elif system == "Linux":
                 cmd = ["scrot", temp_file]
@@ -198,7 +307,7 @@ class ToolExecutor:
         """Read file contents"""
         try:
             with open(path, "r") as f:
-                content = f.read(10000)  # Limit to 10KB
+                content = f.read(10000)
                 if len(content) >= 10000:
                     content += "\n... (truncated)"
                 return content

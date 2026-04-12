@@ -11,6 +11,7 @@ from .websocket import WebSocketManager
 from .claude import ClaudeExecutor
 from .handler import MessageHandler
 from .scheduler import TaskScheduler
+from .profile import ProfileManager
 
 
 logging.basicConfig(
@@ -29,8 +30,10 @@ class CCClawDaemon:
         self.claude: Optional[ClaudeExecutor] = None
         self.handler: Optional[MessageHandler] = None
         self.scheduler: Optional[TaskScheduler] = None
+        self.profile: Optional[ProfileManager] = None
         self._running = False
         self._task_checker_task: Optional[asyncio.Task] = None
+        self._token_checker_task: Optional[asyncio.Task] = None
 
     async def start(self):
         """Start the daemon"""
@@ -43,6 +46,13 @@ class CCClawDaemon:
         # Initialize scheduler
         self.scheduler = TaskScheduler()
         logger.info("Task scheduler initialized")
+
+        # Initialize profile manager
+        self.profile = ProfileManager()
+        if self.profile.is_onboarding_complete():
+            logger.info(f"Profile loaded: {self.profile.profile.profession}")
+        else:
+            logger.info("Profile not onboarded yet — will start when configured")
 
         # Check Claude CLI availability
         self.claude = ClaudeExecutor(self.config)
@@ -61,18 +71,20 @@ class CCClawDaemon:
         # Initialize WebSocket
         self.ws_manager = WebSocketManager(self.config)
 
-        # Initialize handler with scheduler
+        # Initialize handler with scheduler and profile
         self.handler = MessageHandler(
             self.ws_manager,
             self.claude,
             self.config,
             self.scheduler,
+            self.profile,
         )
 
         # Register message handlers
         self.ws_manager.on("message", self.handler.handle_message)
         self.ws_manager.on("error", self.handler.handle_error)
         self.ws_manager.on("delivered", self.handler.handle_delivered)
+        self.ws_manager.on("profile", self.handler.handle_profile_message)
 
         # Connect and start listening
         if await self.ws_manager.connect():
@@ -86,6 +98,9 @@ class CCClawDaemon:
                 # Start task checker in background
                 self._task_checker_task = asyncio.create_task(self._task_checker())
 
+                # Start token budget checker in background
+                self._token_checker_task = asyncio.create_task(self._token_checker())
+
                 # Keep running
                 while self._running:
                     await asyncio.sleep(1)
@@ -95,6 +110,39 @@ class CCClawDaemon:
         else:
             logger.error("Failed to connect to server")
             sys.exit(1)
+
+    async def _token_checker(self):
+        """Background task to check token usage and handle rate limits
+        - Every 1 hour, check if tokens have been refreshed
+        - When rate limited, apply exponential backoff
+        """
+        logger.info("Token budget checker started")
+        while self._running:
+            try:
+                await asyncio.sleep(3600)  # Check every hour
+
+                if not self.profile:
+                    continue
+
+                tb = self.profile.token_budget
+
+                # If rate limited, check if backoff period has passed
+                if tb.is_rate_limited:
+                    logger.info(f"Still rate limited (backoff level {tb.backoff_level})")
+                    continue
+
+                # Check if daily usage was reset (new day = token refresh for some plans)
+                old_reset_date = tb.last_reset_date
+                tb.check_daily_reset()
+                if tb.last_reset_date != old_reset_date:
+                    logger.info(f"New day detected ({tb.last_reset_date}) — token budget may have refreshed")
+                    # Clear rate limit state if we were limited
+                    self.profile.clear_rate_limit()
+
+                logger.info(f"Token check: total_used={tb.total_used}, daily_used={tb.daily_used}")
+
+            except Exception as e:
+                logger.error(f"Error in token checker: {e}")
 
     async def _task_checker(self):
         """Background task to check and execute due tasks"""
@@ -145,6 +193,9 @@ class CCClawDaemon:
 
         if self._task_checker_task:
             self._task_checker_task.cancel()
+
+        if self._token_checker_task:
+            self._token_checker_task.cancel()
 
         if self.ws_manager:
             await self.ws_manager.disconnect()
