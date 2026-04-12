@@ -1,4 +1,4 @@
-"""CC-Claw Lark (Feishu) Bot Module"""
+"""CC-Claw Lark (Feishu) Bot Module - with Onboarding and Autonomous Commands"""
 
 import json
 import logging
@@ -14,6 +14,22 @@ from ..services.storage import init_storage
 from ..services.simple_storage import simple_storage
 
 logger = logging.getLogger(__name__)
+
+# Onboarding steps (same as Telegram)
+ONBOARDING_STEPS = [
+    ("profession", "🏠 你的职业是什么？\n\n（比如：软件工程师、学生、设计师、写作者...）"),
+    ("situation", "📍 你目前的状况是什么？\n\n（比如：在做一个项目、学习编程、正在找工作...）"),
+    ("goal", "🎯 你的短期目标是什么？\n\n（比如：完成作品集、学习 React、启动我的创业项目...）"),
+    ("better", "✨ 对你来说，「更好」是什么样的？\n\n（比如：更有生产力、更井井有条、在编程上更有信心...）"),
+]
+
+STEP_NEXT = {
+    "pending": "profession",
+    "profession": "situation",
+    "situation": "goal",
+    "goal": "better",
+    "better": "complete",
+}
 
 
 class LarkBot:
@@ -36,7 +52,6 @@ class LarkBot:
 
         logger.info("Starting Lark bot in background...")
 
-        # Run in a separate thread since ws_client.start() is blocking
         self._running = True
         thread = threading.Thread(target=self._run_ws_client, daemon=True)
         thread.start()
@@ -69,7 +84,6 @@ class LarkBot:
 
     def _get_tenant_access_token(self) -> Optional[str]:
         """Get or refresh tenant access token"""
-        # Check if current token is still valid
         if self._tenant_access_token and time.time() < self._token_expires_at - 60:
             return self._tenant_access_token
 
@@ -132,16 +146,13 @@ class LarkBot:
     def _handle_message(self, event):
         """Handle incoming message from Lark"""
         try:
-            # Extract message and sender
             sender = event.event.sender
             message = event.event.message
 
-            # Only handle text messages
             if message.message_type != "text":
                 logger.info(f"Ignoring non-text message type: {message.message_type}")
                 return
 
-            # Get sender info
             sender_id = sender.sender_id
             if sender.sender_type != "user":
                 logger.info(f"Ignoring non-user sender type: {sender.sender_type}")
@@ -149,18 +160,13 @@ class LarkBot:
 
             open_id = sender_id.open_id
 
-            # Get message content
-            content = message.content
-            if not content:
-                return
-
-            # Parse content (it's JSON string)
+            # Parse content
             try:
-                content_obj = json.loads(content)
+                content_obj = json.loads(message.content)
                 text = content_obj.get("text", "").strip()
             except (json.JSONDecodeError, AttributeError):
-                text = str(content)
-                logger.warning(f"Could not parse message content as JSON: {content}")
+                text = str(message.content).strip()
+                logger.warning(f"Could not parse message content as JSON: {message.content}")
 
             if not text:
                 return
@@ -169,161 +175,286 @@ class LarkBot:
 
             from ..services.storage import storage
 
+            # Get or create user
+            user = storage.get_user_by_lark_open_id(open_id)
+            if not user:
+                user = storage.get_or_create_user_by_lark(open_id)
+
+            # Check onboarding state
+            state = user.get("onboarding_state", "pending")
+            if state != "complete":
+                return self._handle_onboarding_message(open_id, text, user)
+
             # Check if it's a command
             if text.startswith("/"):
-                self._handle_command(open_id, text, message.message_id)
-                return
+                return self._handle_command(open_id, text, message.message_id, user)
 
-            # Look up user by lark_open_id
-            user = storage.get_user_by_lark_open_id(open_id)
-
-            if not user:
-                # User not paired - prompt to pair
-                self._send_lark_message(open_id, "❌ 您的飞书账号未绑定设备。\n\n发送 /pair 开始配对您的设备。")
-                return
-
-            # Get user's device
-            device = storage.get_user_device(user["id"])
-            if not device:
-                self._send_lark_message(open_id, "❌ 您没有已配对的设备。\n\n发送 /pair 重新配对。")
-                return
-
-            # Check if device is online
-            status = simple_storage.get_device_status(device["id"])
-            if status != "online":
-                self._send_lark_message(open_id, "🔴 您的设备不在线。\n请确保 cc-claw 正在运行。")
-                return
-
-            # Store message for device to poll
-            message_data = {
-                "chat_id": user.get("telegram_id"),  # Keep for backward compat
-                "lark_open_id": open_id,  # Add Lark identification
-                "user_id": user.get("telegram_id"),
-                "content": text,
-                "message_id": str(message.message_id),
-            }
-            simple_storage.publish_message(device["id"], message_data)
-
-            # Send acknowledgment to user
-            self._send_lark_message(open_id, "⏳ 处理中...")
-
-            logger.info(f"Published message to device {device['id']} for user {user['id']}")
+            # Normal message — forward to device
+            return self._handle_normal_message(open_id, text, message.message_id, user)
 
         except Exception as e:
             logger.error(f"Error handling Lark message: {e}", exc_info=True)
 
-    def _handle_command(self, open_id: str, text: str, message_id: str):
-        """Handle commands from Lark"""
+    def _handle_onboarding_message(self, open_id: str, text: str, user: dict):
+        """Handle onboarding messages"""
         from ..services.storage import storage
 
-        # /start - Welcome message
-        if text == "/start":
+        state = user.get("onboarding_state", "pending")
+        onboarding_data = user.get("onboarding_data", {})
+        user_id = user["id"]
+
+        step_map = {k: i for i, (k, _) in enumerate(ONBOARDING_STEPS)}
+        next_state = STEP_NEXT.get(state, "complete")
+
+        if state in step_map:
+            step_key = state
+            onboarding_data[step_key] = text.strip()
+
+        if next_state == "complete":
+            # Onboarding complete
+            storage.set_onboarding_state(user_id, "complete", onboarding_data)
+            logger.info(f"Onboarding complete for Lark user {open_id}: {onboarding_data}")
+
+            # Forward profile to paired device if exists
+            if user.get("device_ids"):
+                device = storage.get_user_device(user_id)
+                if device:
+                    profile_msg = {
+                        "type": "profile",
+                        "action": "save_profile",
+                        "data": {
+                            "profession": onboarding_data.get("profession", ""),
+                            "situation": onboarding_data.get("situation", ""),
+                            "short_term_goal": onboarding_data.get("goal", ""),
+                            "what_better_means": onboarding_data.get("better", ""),
+                        },
+                        "lark_open_id": open_id,
+                        "user_id": user.get("telegram_id", ""),
+                    }
+                    simple_storage.publish_message(device["id"], profile_msg)
+
             self._send_lark_message(open_id,
-                "👋 欢迎使用 CC-Claw！\n\n"
-                "发送 /pair 开始配对您的设备。\n"
-                "/help 查看所有命令。"
+                "✅ 初始化完成！\n\n"
+                f"📋 摘要：\n"
+                f"• 职业：{onboarding_data.get('profession', 'N/A')}\n"
+                f"• 现状：{onboarding_data.get('situation', 'N/A')}\n"
+                f"• 目标：{onboarding_data.get('goal', 'N/A')}\n"
+                f"• 更好：{onboarding_data.get('better', 'N/A')}\n\n"
+                "🎯 你的 AI 伙伴正在为你工作！\n"
+                "发送 /progress 查看状态。"
+            )
+
+        else:
+            # Move to next step
+            storage.set_onboarding_state(user_id, next_state, onboarding_data)
+            step_idx = step_map.get(next_state, 0)
+            if step_idx < len(ONBOARDING_STEPS):
+                _, question = ONBOARDING_STEPS[step_idx]
+                self._send_lark_message(open_id, question)
+            else:
+                self._send_lark_message(open_id, "出错了，发送 /onboarding 重试。")
+
+    def _handle_normal_message(self, open_id: str, text: str, message_id: str, user: dict):
+        """Handle regular messages — forward to device"""
+        from ..services.storage import storage
+
+        device = storage.get_user_device(user["id"])
+        if not device:
+            self._send_lark_message(open_id, "❌ 未配对设备。\n\n发送 /pair 配对。")
+            return
+
+        status = simple_storage.get_device_status(device["id"])
+        if status != "online":
+            self._send_lark_message(open_id, "🔴 设备不在线。\n请确保 cc-claw 正在运行。")
+            return
+
+        message_data = {
+            "chat_id": user.get("telegram_id"),
+            "lark_open_id": open_id,
+            "user_id": user.get("telegram_id", ""),
+            "content": text,
+            "message_id": str(message_id),
+            "priority": True,
+        }
+        simple_storage.publish_message(device["id"], message_data)
+        self._send_lark_message(open_id, "⏳ 处理中...")
+
+    def _handle_command(self, open_id: str, text: str, message_id: str, user: dict):
+        """Handle all commands"""
+        from ..services.storage import storage
+
+        # /start
+        if text == "/start" or text == "/onboarding":
+            state = user.get("onboarding_state", "pending")
+            if state != "complete":
+                storage.set_onboarding_state(user["id"], "profession", {})
+                self._send_lark_message(open_id,
+                    f"👋 让我们开始吧！\n\n"
+                    f"{ONBOARDING_STEPS[0][1]}\n\n"
+                    "直接输入你的回答即可。"
+                )
+                return
+            self._send_lark_message(open_id,
+                "👋 欢迎回到 CC-Claw！\n"
+                "你的 AI 伙伴正在为你工作。\n\n"
+                "命令：\n"
+                "/progress - 查看进度\n"
+                "/pause - 暂停自动执行\n"
+                "/resume - 恢复自动执行\n"
+                "/goals - 查看所有目标\n"
+                "/status - 连接状态\n"
+                "/help - 帮助"
             )
             return
 
-        # /help - Help message
+        # /help
         if text == "/help":
             self._send_lark_message(open_id,
                 "📖 CC-Claw 命令：\n\n"
-                "/start - 欢迎消息\n"
-                "/pair - 配对设备\n"
-                "/unpair - 解绑设备\n"
-                "/status - 查看状态\n"
-                "/tasks - 查看定时任务\n"
-                "/delay <分钟> <命令> - 延迟执行\n"
-                "/help - 帮助信息"
+                "/start - 欢迎 + 初始化\n"
+                "/progress - 查看进度和 Token 统计\n"
+                "/pause - 暂停自动执行\n"
+                "/resume - 恢复自动执行\n"
+                "/tasks - 查看任务队列\n"
+                "/goals - 查看所有目标\n"
+                "/setgoal <id> - 切换工作目标\n"
+                "/status - 连接状态\n"
+                "/onboarding - 重新初始化\n"
+                "/help - 帮助"
             )
             return
 
-        # /pair - Start pairing process
-        if text == "/pair":
-            # Get or create user
-            user = storage.get_or_create_user_by_lark(open_id)
-
-            # Check if already has device paired
-            device = storage.get_user_device(user["id"])
-            if device:
-                self._send_lark_message(open_id,
-                    "⚠️ 您已经有一个设备配对了。\n"
-                    "发送 /unpair 解绑后再试。"
-                )
-                return
-
-            # Generate pairing code
-            code, expires_at = storage.create_pairing(user["id"])
-
-            self._send_lark_message(open_id,
-                f"🔗 配对码：{code}\n\n"
-                "请在您的设备上运行：\n"
-                f"cc-claw pair\n\n"
-                "配对码 5 分钟内有效。"
-            )
-            logger.info(f"Created pairing code {code} for Lark user {open_id}")
-            return
-
-        # /unpair - Unpair device
-        if text == "/unpair":
-            user = storage.get_user_by_lark_open_id(open_id)
-            if not user:
-                self._send_lark_message(open_id, "❌ 您没有配对过设备。")
-                return
-
-            device = storage.get_user_device(user["id"])
-            if device:
-                storage.delete_device(device["id"])
-                # Delete user-device mapping (handle both Telegram and Lark users)
-                telegram_id = user.get("telegram_id")
-                if telegram_id:
-                    simple_storage.delete_user_device(int(telegram_id))
-                else:
-                    simple_storage.delete_user_device_by_lark(open_id)
-                self._send_lark_message(open_id, "✅ 设备已解绑！")
-            else:
-                self._send_lark_message(open_id, "❌ 您没有配对过设备。")
-            return
-
-        # /status - Check status
-        if text == "/status":
-            user = storage.get_user_by_lark_open_id(open_id)
-            if not user:
-                self._send_lark_message(open_id,
-                    "❌ 未配对\n\n发送 /pair 开始配对。"
-                )
-                return
-
-            device = storage.get_user_device(user["id"])
-            if device:
-                status = simple_storage.get_device_status(device["id"])
-                is_online = status == "online"
-                self._send_lark_message(open_id,
-                    f"📱 设备状态\n\n"
-                    f"名称：{device['name']}\n"
-                    f"平台：{device['platform']}\n"
-                    f"状态：{'🟢 在线' if is_online else '🔴 离线'}"
-                )
-            else:
-                self._send_lark_message(open_id,
-                    "❌ 未配对\n\n发送 /pair 开始配对。"
-                )
-            return
-
-        # /tasks - List scheduled tasks (forward to device)
-        if text.strip() == "/tasks":
-            user = storage.get_user_by_lark_open_id(open_id)
-            if not user:
-                self._send_lark_message(open_id, "❌ 您没有配对过设备。\n\n发送 /pair 配对。")
-                return
-
+        # /progress
+        if text.strip() == "/progress":
             device = storage.get_user_device(user["id"])
             if not device:
-                self._send_lark_message(open_id, "❌ 您没有配对过设备。\n\n发送 /pair 配对。")
+                self._send_lark_message(open_id, "❌ 未配对设备。\n\n发送 /pair 配对。")
                 return
+            status = simple_storage.get_device_status(device["id"])
+            if status != "online":
+                self._send_lark_message(open_id, "🔴 设备不在线。")
+                return
+            message_data = {
+                "lark_open_id": open_id,
+                "content": "/progress",
+                "message_id": str(message_id),
+            }
+            simple_storage.publish_message(device["id"], message_data)
+            self._send_lark_message(open_id, "⏳ 获取进度报告...")
+            return
 
-            # Forward to device
+        # /pause
+        if text.strip() == "/pause":
+            device = storage.get_user_device(user["id"])
+            if not device:
+                self._send_lark_message(open_id, "❌ 未配对设备。")
+                return
+            status = simple_storage.get_device_status(device["id"])
+            if status != "online":
+                self._send_lark_message(open_id, "🔴 设备不在线。")
+                return
+            message_data = {
+                "lark_open_id": open_id,
+                "content": "/pause",
+                "message_id": str(message_id),
+            }
+            simple_storage.publish_message(device["id"], message_data)
+            self._send_lark_message(open_id, "⏸️ 已发送暂停信号...")
+            return
+
+        # /resume
+        if text.strip() == "/resume":
+            device = storage.get_user_device(user["id"])
+            if not device:
+                self._send_lark_message(open_id, "❌ 未配对设备。")
+                return
+            status = simple_storage.get_device_status(device["id"])
+            if status != "online":
+                self._send_lark_message(open_id, "🔴 设备不在线。")
+                return
+            message_data = {
+                "lark_open_id": open_id,
+                "content": "/resume",
+                "message_id": str(message_id),
+            }
+            simple_storage.publish_message(device["id"], message_data)
+            self._send_lark_message(open_id, "▶️ 已发送恢复信号...")
+            return
+
+        # /goals
+        if text.strip() == "/goals":
+            device = storage.get_user_device(user["id"])
+            if not device:
+                self._send_lark_message(open_id, "❌ 未配对设备。")
+                return
+            status = simple_storage.get_device_status(device["id"])
+            if status != "online":
+                self._send_lark_message(open_id, "🔴 设备不在线。")
+                return
+            message_data = {
+                "lark_open_id": open_id,
+                "content": "/goals",
+                "message_id": str(message_id),
+            }
+            simple_storage.publish_message(device["id"], message_data)
+            self._send_lark_message(open_id, "⏳ 获取目标列表...")
+            return
+
+        # /setgoal <id>
+        if text.strip().startswith("/setgoal "):
+            parts = text.strip().split(" ", 1)
+            if len(parts) > 1:
+                goal_id = parts[1].strip()
+                device = storage.get_user_device(user["id"])
+                if not device:
+                    self._send_lark_message(open_id, "❌ 未配对设备。")
+                    return
+                status = simple_storage.get_device_status(device["id"])
+                if status != "online":
+                    self._send_lark_message(open_id, "🔴 设备不在线。")
+                    return
+                message_data = {
+                    "lark_open_id": open_id,
+                    "content": f"/setgoal {goal_id}",
+                    "message_id": str(message_id),
+                }
+                simple_storage.publish_message(device["id"], message_data)
+                self._send_lark_message(open_id, "🔄 切换目标中...")
+                return
+            self._send_lark_message(open_id,
+                "❌ 用法：/setgoal <目标ID>\n\n"
+                "先用 /goals 查看所有目标及其ID。"
+            )
+            return
+
+        # /status
+        if text.strip() == "/status":
+            device = storage.get_user_device(user["id"])
+            if not device:
+                self._send_lark_message(open_id, "❌ 未配对设备。\n\n发送 /pair 配对。")
+                return
+            status = simple_storage.get_device_status(device["id"])
+            is_online = status == "online"
+            state = user.get("onboarding_state", "pending")
+            self._send_lark_message(open_id,
+                f"📱 设备状态\n\n"
+                f"名称：{device['name']}\n"
+                f"平台：{device['platform']}\n"
+                f"状态：{'🟢 在线' if is_online else '🔴 离线'}\n"
+                f"初始化：{'✅ 完成' if state == 'complete' else '⏳ 未完成'}"
+            )
+            return
+
+        # /tasks
+        if text.strip() == "/tasks":
+            device = storage.get_user_device(user["id"])
+            if not device:
+                self._send_lark_message(open_id, "❌ 未配对设备。")
+                return
+            status = simple_storage.get_device_status(device["id"])
+            if status != "online":
+                self._send_lark_message(open_id, "🔴 设备不在线。")
+                return
             message_data = {
                 "lark_open_id": open_id,
                 "content": "/tasks",
@@ -333,24 +464,16 @@ class LarkBot:
             self._send_lark_message(open_id, "⏳ 获取任务列表...")
             return
 
-        # /delay - Forward to device for processing
+        # /delay
         if text.startswith("/delay "):
-            user = storage.get_user_by_lark_open_id(open_id)
-            if not user:
-                self._send_lark_message(open_id, "❌ 您没有配对过设备。\n\n发送 /pair 配对。")
-                return
-
             device = storage.get_user_device(user["id"])
             if not device:
-                self._send_lark_message(open_id, "❌ 您没有配对过设备。\n\n发送 /pair 配对。")
+                self._send_lark_message(open_id, "❌ 未配对设备。")
                 return
-
             status = simple_storage.get_device_status(device["id"])
             if status != "online":
-                self._send_lark_message(open_id, "🔴 您的设备不在线。")
+                self._send_lark_message(open_id, "🔴 设备不在线。")
                 return
-
-            # Forward to device
             message_data = {
                 "lark_open_id": open_id,
                 "content": text,
@@ -360,6 +483,33 @@ class LarkBot:
             self._send_lark_message(open_id, "⏳ 处理中...")
             return
 
+        # /pair
+        if text.strip() == "/pair":
+            device = storage.get_user_device(user["id"])
+            if device:
+                self._send_lark_message(open_id, "⚠️ 已配对设备。\n发送 /unpair 解绑后再试。")
+                return
+            code, expires_at = storage.create_pairing(user["id"])
+            self._send_lark_message(open_id,
+                f"🔗 配对码：{code}\n\n"
+                "在你的设备上运行：\n"
+                f"cc-claw pair\n\n"
+                "配对码 5 分钟内有效。"
+            )
+            logger.info(f"Created pairing code {code} for Lark user {open_id}")
+            return
+
+        # /unpair
+        if text.strip() == "/unpair":
+            device = storage.get_user_device(user["id"])
+            if not device:
+                self._send_lark_message(open_id, "❌ 未配对过设备。")
+                return
+            storage.delete_device(device["id"])
+            simple_storage.delete_user_device_by_lark(open_id)
+            self._send_lark_message(open_id, "✅ 设备已解绑！")
+            return
+
         # Unknown command
         self._send_lark_message(open_id,
             "❌ 未知命令。\n\n发送 /help 查看可用命令。"
@@ -367,7 +517,6 @@ class LarkBot:
 
     def send_message_to_lark_user(self, open_id: str, text: str):
         """Send message to a Lark user (called from other parts of the server)"""
-        # Run in a thread to avoid blocking
         thread = threading.Thread(target=self._send_lark_message, args=(open_id, text), daemon=True)
         thread.start()
 
