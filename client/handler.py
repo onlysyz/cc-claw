@@ -26,7 +26,9 @@ class MessageHandler:
         config: ClientConfig,
         scheduler: TaskScheduler,
         profile: ProfileManager,
-        queue_manager=None,  # optional, for priority queue
+        queue_manager=None,
+        goal_engine=None,
+        on_autonomous_start: Optional[Callable[[], None]] = None,  # callback to start runner
         on_message_sent: Optional[Callable[[str], Awaitable[None]]] = None,
     ):
         self.ws = ws_manager
@@ -35,9 +37,11 @@ class MessageHandler:
         self.scheduler = scheduler
         self.profile = profile
         self.queue_manager = queue_manager
+        self.goal_engine = goal_engine
+        self.on_autonomous_start = on_autonomous_start
         self.on_message_sent = on_message_sent
         self.token_tracker = TokenTracker()
-        self.autonomous_mode = True  # start in autonomous mode by default
+        self.autonomous_mode = True
 
         # Register handlers
         self.ws.on("message", self.handle_message)
@@ -151,6 +155,9 @@ class MessageHandler:
 
         Received as: {"type": "profile_data", "profession": ..., "situation": ..., ...}
         No message_id that would cause echo-back to user.
+
+        After saving profile, immediately triggers goal decomposition and
+        starts the autonomous execution loop.
         """
         try:
             profession = message.data.get("profession", "")
@@ -173,9 +180,29 @@ class MessageHandler:
             logger.info(f"Profile saved. onboarding_completed={self.profile.profile.onboarding_completed}")
 
             # Create initial goal from short_term_goal
+            goal = None
             if short_term_goal:
                 goal = self.profile.add_goal(short_term_goal)
                 logger.info(f"Created initial goal: {goal.id} - {short_term_goal}")
+
+            # Enable autonomous mode and start runner if not running
+            self.autonomous_mode = True
+            logger.info("Autonomous mode enabled")
+            if self.on_autonomous_start:
+                self.on_autonomous_start()
+                logger.info("Autonomous runner started via callback")
+
+            # Immediately decompose goal and add tasks to queue
+            if goal and hasattr(self, 'goal_engine') and self.goal_engine:
+                logger.info(f"Decomposing goal {goal.id} into tasks...")
+                tasks = await self.goal_engine.decompose_goal(goal.id)
+                if tasks:
+                    logger.info(f"Decomposed into {len(tasks)} tasks, queueing...")
+                    for task in tasks:
+                        self.queue_manager.queue.enqueue(task, user_initiated=False)
+                    logger.info(f"Queued {len(tasks)} tasks for autonomous execution")
+                else:
+                    logger.warning(f"Goal decomposition returned no tasks")
 
             # Note: we don't send a message back to server here because
             # profile_data messages don't carry a Lark message_id (intentionally)

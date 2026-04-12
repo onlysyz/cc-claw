@@ -82,7 +82,7 @@ class CCClawDaemon:
         # Initialize WebSocket
         self.ws_manager = WebSocketManager(self.config)
 
-        # Initialize handler with scheduler, profile, and queue manager
+        # Initialize handler with scheduler, profile, goal_engine, and queue manager
         self.handler = MessageHandler(
             self.ws_manager,
             self.claude,
@@ -90,6 +90,8 @@ class CCClawDaemon:
             self.scheduler,
             self.profile,
             self.queue_manager,
+            self.goal_engine,
+            on_autonomous_start=lambda: self._start_autonomous_runner_if_needed(),
         )
 
         # Register message handlers
@@ -113,11 +115,8 @@ class CCClawDaemon:
                 # Start token budget checker in background
                 self._token_checker_task = asyncio.create_task(self._token_checker())
 
-                # Start autonomous runner if profile is ready
-                if self.profile.is_onboarding_complete():
-                    self._autonomous_runner_task = asyncio.create_task(self._autonomous_runner())
-                else:
-                    logger.info("Skipping autonomous runner — onboarding not complete")
+                # Autonomous runner will be started by profile handler callback after onboarding
+                logger.info("Autonomous runner will start after onboarding completes")
 
                 # Keep running
                 while self._running:
@@ -161,6 +160,15 @@ class CCClawDaemon:
 
             except Exception as e:
                 logger.error(f"Error in token checker: {e}")
+
+    def _start_autonomous_runner_if_needed(self):
+        """Start the autonomous runner if not already running (called from handler callback)"""
+        if self._autonomous_runner_task is not None and not self._autonomous_runner_task.done():
+            logger.info("Autonomous runner already running")
+            return
+        logger.info("Starting autonomous runner (triggered by profile save)")
+        loop = asyncio.get_event_loop()
+        self._autonomous_runner_task = loop.create_task(self._autonomous_runner())
 
     async def _autonomous_runner(self):
         """Autonomous goal execution loop
