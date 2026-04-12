@@ -12,6 +12,7 @@ from .claude import ClaudeExecutor
 from .handler import MessageHandler
 from .scheduler import TaskScheduler
 from .profile import ProfileManager
+from .goal_engine import GoalEngine
 
 
 logging.basicConfig(
@@ -31,9 +32,11 @@ class CCClawDaemon:
         self.handler: Optional[MessageHandler] = None
         self.scheduler: Optional[TaskScheduler] = None
         self.profile: Optional[ProfileManager] = None
+        self.goal_engine: Optional[GoalEngine] = None
         self._running = False
         self._task_checker_task: Optional[asyncio.Task] = None
         self._token_checker_task: Optional[asyncio.Task] = None
+        self._autonomous_runner_task: Optional[asyncio.Task] = None
 
     async def start(self):
         """Start the daemon"""
@@ -53,6 +56,9 @@ class CCClawDaemon:
             logger.info(f"Profile loaded: {self.profile.profile.profession}")
         else:
             logger.info("Profile not onboarded yet — will start when configured")
+
+        # Initialize goal engine
+        self.goal_engine = GoalEngine(self.config, self.profile, self.claude)
 
         # Check Claude CLI availability
         self.claude = ClaudeExecutor(self.config)
@@ -101,6 +107,12 @@ class CCClawDaemon:
                 # Start token budget checker in background
                 self._token_checker_task = asyncio.create_task(self._token_checker())
 
+                # Start autonomous runner if profile is ready
+                if self.profile.is_onboarding_complete():
+                    self._autonomous_runner_task = asyncio.create_task(self._autonomous_runner())
+                else:
+                    logger.info("Skipping autonomous runner — onboarding not complete")
+
                 # Keep running
                 while self._running:
                     await asyncio.sleep(1)
@@ -143,6 +155,126 @@ class CCClawDaemon:
 
             except Exception as e:
                 logger.error(f"Error in token checker: {e}")
+
+    async def _autonomous_runner(self):
+        """Autonomous goal execution loop
+        - While autonomous_mode is True and goals exist
+        - Pop top pending task, execute it
+        - If no tasks, decompose goal
+        - On 429/rate limit, backoff and retry
+        """
+        logger.info("Autonomous runner started")
+        loop_count = 0
+
+        while self._running:
+            try:
+                loop_count += 1
+
+                # Check if autonomous mode is enabled
+                if not self.handler.autonomous_mode:
+                    await asyncio.sleep(5)
+                    continue
+
+                # Check token budget — if rate limited, apply backoff
+                tb = self.profile.token_budget
+                if tb.is_rate_limited:
+                    wait_seconds = 60 * (2 ** (tb.backoff_level - 1)) if tb.backoff_level > 0 else 60
+                    logger.info(f"Rate limited, backing off for {wait_seconds}s")
+                    await asyncio.sleep(wait_seconds)
+                    continue
+
+                # Get active goals
+                active_goals = self.profile.get_active_goals()
+                if not active_goals:
+                    # No active goals yet — wait
+                    if loop_count % 60 == 0:  # Log every ~5 min
+                        logger.info("No active goals, waiting...")
+                    await asyncio.sleep(5)
+                    continue
+
+                # Pick the first active goal
+                goal = active_goals[0]
+
+                # Check if goal needs decomposition
+                pending = [t for t in self.profile.get_tasks_for_goal(goal.id)
+                           if t.status.value == "pending"]
+                if not pending:
+                    logger.info(f"Goal '{goal.description}' has no tasks — decomposing...")
+                    new_tasks = await self.goal_engine.decompose_goal(goal.id)
+                    if not new_tasks:
+                        logger.warning(f"Could not decompose goal {goal.id}, waiting...")
+                        await asyncio.sleep(30)
+                        continue
+
+                # Pop top task
+                task = self.profile.pop_top_task()
+                if not task:
+                    await asyncio.sleep(5)
+                    continue
+
+                logger.info(f"[AUTONOMOUS] Executing task: {task.description[:60]}...")
+                await self._execute_autonomous_task(task, goal)
+
+            except Exception as e:
+                logger.error(f"Error in autonomous runner: {e}", exc_info=True)
+                await asyncio.sleep(10)
+
+    async def _execute_autonomous_task(self, task, goal):
+        """Execute a task in autonomous mode and handle result"""
+        try:
+            # Execute with Claude
+            response, images = await self.claude.execute(task.description)
+
+            # Check for rate limit
+            is_rate_limited = (
+                "429" in response or
+                "rate limit" in response.lower() or
+                "too many requests" in response.lower()
+            )
+
+            if is_rate_limited:
+                # Mark task as still pending (not failed) so it can be retried
+                task.status = task.__class__.__members__.get('PENDING')
+                # Apply backoff
+                wait = self.profile.increment_backoff()
+                logger.warning(f"Rate limited during autonomous task, backing off {wait}s")
+                await asyncio.sleep(wait)
+                return
+
+            # Parse token usage
+            from .token_tracker import TokenTracker
+            tracker = TokenTracker()
+            _, usage, _ = tracker.parse_json_response(response)
+            if usage:
+                self.profile.record_usage(usage.total_tokens)
+                logger.info(f"Token usage: {usage.total_tokens}")
+
+            # Summarize result
+            result_summary = response[:200].replace('\n', ' ')
+
+            # Complete the task
+            self.profile.complete_task(task.id, result_summary=result_summary)
+            logger.info(f"Task completed: {task.id[:8]} — {result_summary[:50]}...")
+
+            # Check if goal is complete
+            remaining = [t for t in self.profile.get_tasks_for_goal(goal.id)
+                         if t.status.value == "pending"]
+            if not remaining:
+                logger.info(f"Goal '{goal.description}' — all tasks done!")
+                self.profile.complete_goal(goal.id)
+
+                # Notify user via server (if connected)
+                if self.ws_manager and self.ws_manager.is_connected:
+                    msg = {
+                        "type": "goal_complete",
+                        "goal_id": goal.id,
+                        "goal_description": goal.description,
+                    }
+                    await self.ws_manager.send(msg)
+
+        except Exception as e:
+            logger.error(f"Error executing autonomous task {task.id[:8]}: {e}")
+            self.profile.fail_task(task.id, str(e))
 
     async def _task_checker(self):
         """Background task to check and execute due tasks"""
@@ -196,6 +328,9 @@ class CCClawDaemon:
 
         if self._token_checker_task:
             self._token_checker_task.cancel()
+
+        if self._autonomous_runner_task:
+            self._autonomous_runner_task.cancel()
 
         if self.ws_manager:
             await self.ws_manager.disconnect()
