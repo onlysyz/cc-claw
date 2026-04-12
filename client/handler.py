@@ -25,6 +25,7 @@ class MessageHandler:
         config: ClientConfig,
         scheduler: TaskScheduler,
         profile: ProfileManager,
+        queue_manager=None,  # optional, for priority queue
         on_message_sent: Optional[Callable[[str], Awaitable[None]]] = None,
     ):
         self.ws = ws_manager
@@ -32,6 +33,7 @@ class MessageHandler:
         self.config = config
         self.scheduler = scheduler
         self.profile = profile
+        self.queue_manager = queue_manager
         self.on_message_sent = on_message_sent
         self.token_tracker = TokenTracker()
         self.autonomous_mode = True  # start in autonomous mode by default
@@ -88,11 +90,18 @@ class MessageHandler:
                 await self._handle_goals_command(message_id, lark_open_id)
                 return
 
-            # User message — if priority (user-initiated), insert at front of queue
-            if is_priority:
-                logger.info("Priority message from user — would insert at front of queue")
-                # For now, execute immediately (interrupt current if needed)
-                # TODO: integrate with task queue for proper interruption
+            # User message — if priority, insert at front of queue (don't execute now)
+            if is_priority and self.queue_manager:
+                # Enqueue for autonomous execution (user's command goes to front)
+                active_goals = self.profile.get_active_goals()
+                goal_id = active_goals[0].id if active_goals else "default"
+                self.queue_manager.add_user_task(content, goal_id)
+                logger.info(f"User task enqueued at front: {content[:50]}...")
+                # Acknowledge receipt
+                if message_id:
+                    ack_resp = "✅ 收到！任务已排到最前面，我会尽快完成。"
+                    await self.ws.send_message(ack_resp, message_id, [], lark_open_id)
+                return
 
             # Execute with Claude
             logger.info("Calling Claude executor...")

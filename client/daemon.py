@@ -13,6 +13,7 @@ from .handler import MessageHandler
 from .scheduler import TaskScheduler
 from .profile import ProfileManager
 from .goal_engine import GoalEngine
+from .task_queue import QueueManager
 
 
 logging.basicConfig(
@@ -33,6 +34,7 @@ class CCClawDaemon:
         self.scheduler: Optional[TaskScheduler] = None
         self.profile: Optional[ProfileManager] = None
         self.goal_engine: Optional[GoalEngine] = None
+        self.queue_manager: Optional[QueueManager] = None
         self._running = False
         self._task_checker_task: Optional[asyncio.Task] = None
         self._token_checker_task: Optional[asyncio.Task] = None
@@ -57,9 +59,6 @@ class CCClawDaemon:
         else:
             logger.info("Profile not onboarded yet — will start when configured")
 
-        # Initialize goal engine
-        self.goal_engine = GoalEngine(self.config, self.profile, self.claude)
-
         # Check Claude CLI availability
         self.claude = ClaudeExecutor(self.config)
         if not self.claude.is_available():
@@ -69,6 +68,12 @@ class CCClawDaemon:
 
         logger.info(f"Claude CLI version: {self.claude.get_version()}")
 
+        # Initialize goal engine
+        self.goal_engine = GoalEngine(self.config, self.profile, self.claude)
+
+        # Initialize queue manager
+        self.queue_manager = QueueManager(self.profile)
+
         # Check configuration
         if not self.config.device_id or not self.config.device_token:
             logger.error("Device not configured. Please run 'cc-claw pair' first.")
@@ -77,13 +82,14 @@ class CCClawDaemon:
         # Initialize WebSocket
         self.ws_manager = WebSocketManager(self.config)
 
-        # Initialize handler with scheduler and profile
+        # Initialize handler with scheduler, profile, and queue manager
         self.handler = MessageHandler(
             self.ws_manager,
             self.claude,
             self.config,
             self.scheduler,
             self.profile,
+            self.queue_manager,
         )
 
         # Register message handlers
@@ -206,21 +212,34 @@ class CCClawDaemon:
                         await asyncio.sleep(30)
                         continue
 
-                # Pop top task
-                task = self.profile.pop_top_task()
-                if not task:
+                # Pop top task from queue (priority queue handles user tasks first)
+                qt = await self.queue_manager.get_next_task()
+                if not qt:
                     await asyncio.sleep(5)
                     continue
 
-                logger.info(f"[AUTONOMOUS] Executing task: {task.description[:60]}...")
-                await self._execute_autonomous_task(task, goal)
+                self.queue_manager.queue.mark_executing(qt)
+                logger.info(f"[AUTONOMOUS] Executing task: {qt.task.description[:60]}...")
+                await self._execute_autonomous_task(qt)
 
             except Exception as e:
                 logger.error(f"Error in autonomous runner: {e}", exc_info=True)
                 await asyncio.sleep(10)
 
-    async def _execute_autonomous_task(self, task, goal):
+    async def _execute_autonomous_task(self, qt):
         """Execute a task in autonomous mode and handle result"""
+        from .profile import TaskStatus
+
+        task = qt.task
+        goal_id = task.goal_id
+
+        # Find the goal
+        goal = None
+        for g in self.profile.goals:
+            if g.id == goal_id:
+                goal = g
+                break
+
         try:
             # Execute with Claude
             response, images = await self.claude.execute(task.description)
@@ -233,12 +252,19 @@ class CCClawDaemon:
             )
 
             if is_rate_limited:
-                # Mark task as still pending (not failed) so it can be retried
-                task.status = task.__class__.__members__.get('PENDING')
-                # Apply backoff
+                # Requeue at front, wait, will be retried
+                from .profile import Task
+                task_obj = Task(
+                    id=task.id,
+                    description=task.description,
+                    goal_id=task.goal_id,
+                    status=TaskStatus.PENDING,
+                )
+                self.queue_manager.requeue_front(qt)
                 wait = self.profile.increment_backoff()
-                logger.warning(f"Rate limited during autonomous task, backing off {wait}s")
+                logger.warning(f"Rate limited, requeued task, backing off {wait}s")
                 await asyncio.sleep(wait)
+                self.queue_manager.queue.mark_done()
                 return
 
             # Parse token usage
@@ -257,24 +283,25 @@ class CCClawDaemon:
             logger.info(f"Task completed: {task.id[:8]} — {result_summary[:50]}...")
 
             # Check if goal is complete
-            remaining = [t for t in self.profile.get_tasks_for_goal(goal.id)
-                         if t.status.value == "pending"]
-            if not remaining:
-                logger.info(f"Goal '{goal.description}' — all tasks done!")
-                self.profile.complete_goal(goal.id)
-
-                # Notify user via server (if connected)
-                if self.ws_manager and self.ws_manager.is_connected:
-                    msg = {
-                        "type": "goal_complete",
-                        "goal_id": goal.id,
-                        "goal_description": goal.description,
-                    }
-                    await self.ws_manager.send(msg)
+            if goal:
+                remaining = [t for t in self.profile.get_tasks_for_goal(goal.id)
+                             if t.status.value == "pending"]
+                if not remaining:
+                    logger.info(f"Goal '{goal.description}' — all tasks done!")
+                    self.profile.complete_goal(goal.id)
+                    if self.ws_manager and self.ws_manager.is_connected:
+                        msg = {
+                            "type": "goal_complete",
+                            "goal_id": goal.id,
+                            "goal_description": goal.description,
+                        }
+                        await self.ws_manager.send(msg)
 
         except Exception as e:
             logger.error(f"Error executing autonomous task {task.id[:8]}: {e}")
             self.profile.fail_task(task.id, str(e))
+        finally:
+            self.queue_manager.queue.mark_done()
 
     async def _task_checker(self):
         """Background task to check and execute due tasks"""
