@@ -217,10 +217,12 @@ class WebSocketServer:
 
         msg = {
             "type": "profile_data",
-            "profession": profile_data.get("profession", ""),
-            "situation": profile_data.get("situation", ""),
-            "short_term_goal": profile_data.get("short_term_goal", ""),
-            "what_better_means": profile_data.get("what_better_means", ""),
+            "data": {
+                "profession": profile_data.get("profession", ""),
+                "situation": profile_data.get("situation", ""),
+                "short_term_goal": profile_data.get("short_term_goal", ""),
+                "what_better_means": profile_data.get("what_better_means", ""),
+            },
             "lark_open_id": lark_open_id,
             "message_id": message_id,
         }
