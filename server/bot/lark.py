@@ -182,6 +182,7 @@ class LarkBot:
 
             # Check onboarding state
             state = user.get("onboarding_state", "pending")
+            logger.info(f"Onboarding state for {open_id}: {state}")
             if state != "complete":
                 return self._handle_onboarding_message(open_id, text, user)
 
@@ -292,17 +293,20 @@ class LarkBot:
 
         # /start
         if text == "/start" or text == "/onboarding":
-            state = user.get("onboarding_state", "pending")
-            if state != "complete":
+            # /onboarding always forces restart regardless of current state
+            if text == "/onboarding":
                 storage.set_onboarding_state(user["id"], "profession", {})
-            # Force restart onboarding for /onboarding, or if not yet complete
-            if text == "/onboarding" or state != "complete":
-                self._send_lark_message(open_id,
-                    f"👋 让我们开始吧！\n\n"
-                    f"{ONBOARDING_STEPS[0][1]}\n\n"
-                    "直接输入你的回答即可。"
-                )
-                return
+            else:
+                state = user.get("onboarding_state", "pending")
+                if state != "complete":
+                    storage.set_onboarding_state(user["id"], "profession", {})
+
+            self._send_lark_message(open_id,
+                f"👋 让我们开始吧！\n\n"
+                f"{ONBOARDING_STEPS[0][1]}\n\n"
+                "直接输入你的回答即可。"
+            )
+            return
             self._send_lark_message(open_id,
                 "👋 欢迎回到 CC-Claw！\n"
                 "你的 AI 伙伴正在为你工作。\n\n"
