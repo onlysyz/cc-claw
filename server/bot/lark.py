@@ -288,6 +288,8 @@ class LarkBot:
             state = user.get("onboarding_state", "pending")
             if state != "complete":
                 storage.set_onboarding_state(user["id"], "profession", {})
+            # Force restart onboarding for /onboarding, or if not yet complete
+            if text == "/onboarding" or state != "complete":
                 self._send_lark_message(open_id,
                     f"👋 让我们开始吧！\n\n"
                     f"{ONBOARDING_STEPS[0][1]}\n\n"
