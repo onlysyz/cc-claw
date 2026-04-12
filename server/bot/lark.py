@@ -254,8 +254,16 @@ class LarkBot:
                 self._send_lark_message(open_id, "出错了，发送 /onboarding 重试。")
 
     def _handle_normal_message(self, open_id: str, text: str, message_id: str, user: dict):
-        """Handle regular messages — forward to device"""
+        """Handle regular messages — forward to device (skip during onboarding)"""
         from ..services.storage import storage
+
+        # Skip forwarding during onboarding — user is in onboarding flow,
+        # server handles sending next question via _send_lark_message directly
+        state = user.get("onboarding_state", "pending")
+        if state != "complete":
+            # During onboarding, don't forward to device — just silently absorb
+            # The next onboarding question will be sent via _handle_onboarding_message
+            return
 
         device = storage.get_user_device(user["id"])
         if not device:
