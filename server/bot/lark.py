@@ -61,8 +61,8 @@ class LarkBot:
         try:
             from lark_oapi.api.im.v1.model.p2_im_message_receive_v1 import P2ImMessageReceiveV1
 
-            def handle_event(event: P2ImMessageReceiveV1):
-                self._handle_message(event)
+            async def handle_event(event: P2ImMessageReceiveV1):
+                await self._handle_message(event)
 
             handler = (EventDispatcherHandler
                 .builder('', '')
@@ -143,7 +143,7 @@ class LarkBot:
         except Exception as e:
             logger.error(f"Error sending Lark message: {e}")
 
-    def _handle_message(self, event):
+    async def _handle_message(self, event):
         """Handle incoming message from Lark"""
         try:
             sender = event.event.sender
