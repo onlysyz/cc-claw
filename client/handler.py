@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+from datetime import datetime
 from typing import Optional, Callable, Awaitable
 
 from .websocket import WebSocketManager, Message
@@ -151,17 +152,23 @@ class MessageHandler:
         try:
             action = message.data.get("action", "")
             profile_data = message.data.get("data", {})
-            chat_id = message.data.get("chat_id")
+            lark_open_id = message.data.get("lark_open_id")
             user_id = message.data.get("user_id")
 
+            logger.info(f"Profile message: action={action}, data={profile_data}")
+
             if action == "save_profile":
-                self.profile.save_profile(
-                    profession=profile_data.get("profession", ""),
-                    situation=profile_data.get("situation", ""),
-                    short_term_goal=profile_data.get("short_term_goal", ""),
-                    what_better_means=profile_data.get("what_better_means", ""),
-                )
-                logger.info(f"Profile saved for user {user_id}")
+                # Update profile fields in-place (don't replace object)
+                self.profile.profile.profession = profile_data.get("profession", "")
+                self.profile.profile.situation = profile_data.get("situation", "")
+                self.profile.profile.short_term_goal = profile_data.get("short_term_goal", "")
+                self.profile.profile.what_better_means = profile_data.get("what_better_means", "")
+                self.profile.profile.onboarding_completed = True
+                self.profile.profile.updated_at = datetime.now().isoformat()
+                self.profile._save()
+
+                logger.info(f"Profile saved and persisted for user {user_id}")
+                logger.info(f"  onboarding_completed={self.profile.profile.onboarding_completed}")
 
                 # Create initial goal from profile
                 goal_text = profile_data.get("short_term_goal", "")
@@ -169,7 +176,15 @@ class MessageHandler:
                     goal = self.profile.add_goal(goal_text)
                     logger.info(f"Created initial goal: {goal.id} - {goal_text}")
 
-                # Notify server profile was saved
+                # Confirm to user via Lark (or Telegram)
+                confirm = (
+                    f"✅ Profile received!\n\n"
+                    f"Goal set: {goal_text[:50]}...\n"
+                    f"🎯 Autonomous mode starting..."
+                )
+                await self.ws.send_message(confirm, message.message_id, [], lark_open_id)
+
+                # Acknowledge
                 if message.message_id:
                     await self.ws.send_ack(message.message_id)
 
