@@ -1,0 +1,420 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CC-Claw Demo - Your tireless AI working companion</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            color: #fff;
+            min-height: 100vh;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+
+        /* Hero Section */
+        .hero {
+            text-align: center;
+            padding: 4rem 0;
+        }
+
+        .logo {
+            font-size: 4rem;
+            margin-bottom: 1rem;
+        }
+
+        h1 {
+            font-size: 3rem;
+            background: linear-gradient(90deg, #00d4ff, #7b2cbf);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 1rem;
+        }
+
+        .tagline {
+            font-size: 1.5rem;
+            color: #a0a0a0;
+            margin-bottom: 2rem;
+        }
+
+        .cta-buttons {
+            display: flex;
+            gap: 1rem;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+
+        .btn {
+            padding: 1rem 2rem;
+            border-radius: 50px;
+            text-decoration: none;
+            font-weight: bold;
+            transition: transform 0.3s, box-shadow 0.3s;
+        }
+
+        .btn:hover {
+            transform: translateY(-3px);
+        }
+
+        .btn-primary {
+            background: linear-gradient(90deg, #00d4ff, #7b2cbf);
+            color: #fff;
+        }
+
+        .btn-secondary {
+            border: 2px solid #00d4ff;
+            color: #00d4ff;
+        }
+
+        /* Demo Section */
+        .demo-section {
+            padding: 4rem 0;
+        }
+
+        .demo-window {
+            background: #0d1117;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+            max-width: 800px;
+            margin: 0 auto;
+        }
+
+        .demo-header {
+            background: #161b22;
+            padding: 0.75rem 1rem;
+            display: flex;
+            gap: 0.5rem;
+        }
+
+        .dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+        }
+
+        .dot-red { background: #ff5f57; }
+        .dot-yellow { background: #febc2e; }
+        .dot-green { background: #28c840; }
+
+        .demo-content {
+            padding: 2rem;
+            font-family: 'Monaco', 'Menlo', monospace;
+            font-size: 0.9rem;
+            line-height: 1.8;
+            min-height: 400px;
+        }
+
+        .message {
+            margin-bottom: 1.5rem;
+            animation: fadeIn 0.5s ease;
+        }
+
+        .user-msg {
+            color: #58a6ff;
+        }
+
+        .bot-msg {
+            color: #7ee787;
+        }
+
+        .timestamp {
+            color: #484f58;
+            font-size: 0.75rem;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        /* Features Grid */
+        .features {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 2rem;
+            padding: 4rem 0;
+        }
+
+        .feature-card {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 12px;
+            padding: 2rem;
+            text-align: center;
+            transition: transform 0.3s;
+        }
+
+        .feature-card:hover {
+            transform: translateY(-5px);
+        }
+
+        .feature-icon {
+            font-size: 3rem;
+            margin-bottom: 1rem;
+        }
+
+        .feature-title {
+            font-size: 1.25rem;
+            margin-bottom: 0.5rem;
+        }
+
+        .feature-desc {
+            color: #a0a0a0;
+        }
+
+        /* Workflow */
+        .workflow {
+            padding: 4rem 0;
+            text-align: center;
+        }
+
+        .workflow-steps {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 2rem;
+            flex-wrap: wrap;
+            margin-top: 3rem;
+        }
+
+        .step {
+            text-align: center;
+        }
+
+        .step-number {
+            width: 60px;
+            height: 60px;
+            background: linear-gradient(90deg, #00d4ff, #7b2cbf);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.5rem;
+            font-weight: bold;
+            margin: 0 auto 1rem;
+        }
+
+        .step-title {
+            font-size: 1.1rem;
+            margin-bottom: 0.5rem;
+        }
+
+        .step-desc {
+            color: #a0a0a0;
+            font-size: 0.9rem;
+            max-width: 150px;
+        }
+
+        .arrow {
+            font-size: 2rem;
+            color: #00d4ff;
+        }
+
+        /* Social Links */
+        .social {
+            text-align: center;
+            padding: 4rem 0;
+        }
+
+        .social-links {
+            display: flex;
+            gap: 2rem;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+
+        .social-link {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            color: #a0a0a0;
+            text-decoration: none;
+            transition: color 0.3s;
+        }
+
+        .social-link:hover {
+            color: #00d4ff;
+        }
+
+        /* Footer */
+        footer {
+            text-align: center;
+            padding: 2rem;
+            color: #484f58;
+            border-top: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            h1 { font-size: 2rem; }
+            .tagline { font-size: 1.1rem; }
+            .workflow-steps { flex-direction: column; }
+            .arrow { transform: rotate(90deg); }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Hero -->
+        <section class="hero">
+            <div class="logo">🦞</div>
+            <h1>CC-Claw</h1>
+            <p class="tagline">Your tireless AI working companion — making every token count.</p>
+            <div class="cta-buttons">
+                <a href="https://github.com/onlysyz/cc-claw" class="btn btn-primary">View on GitHub</a>
+                <a href="#demo" class="btn btn-secondary">See it in Action</a>
+            </div>
+        </section>
+
+        <!-- Demo -->
+        <section class="demo-section" id="demo">
+            <h2 style="text-align: center; margin-bottom: 2rem;">See CC-Claw in Action</h2>
+            <div class="demo-window">
+                <div class="demo-header">
+                    <div class="dot dot-red"></div>
+                    <div class="dot dot-yellow"></div>
+                    <div class="dot dot-green"></div>
+                </div>
+                <div class="demo-content">
+                    <div class="message">
+                        <div class="user-msg">
+                            <span class="timestamp">10:32 AM</span><br>
+                            🎯 I want to implement a user authentication system with JWT tokens for my Express API
+                        </div>
+                    </div>
+                    <div class="message">
+                        <div class="bot-msg">
+                            <span class="timestamp">10:32 AM</span><br>
+                            ✅ Goal set: Implement JWT authentication system<br><br>
+                            📋 Decomposing into tasks...<br><br>
+                            1. ✅ Create User model with password hashing<br>
+                            2. 🔄 Writing JWT middleware...<br>
+                            3. ⏳ Add login/logout endpoints<br>
+                            4. ⏳ Write authentication tests<br>
+                            5. ⏳ Update API documentation
+                        </div>
+                    </div>
+                    <div class="message">
+                        <div class="bot-msg">
+                            <span class="timestamp">10:35 AM</span><br>
+                            ✅ Task complete: JWT middleware written<br>
+                            📁 Created: middleware/auth.js<br>
+                            <br>
+                            🔄 Executing: Add login/logout endpoints...
+                        </div>
+                    </div>
+                    <div class="message">
+                        <div class="bot-msg">
+                            <span class="timestamp">10:38 AM</span><br>
+                            ⚠️ Rate limited (429). Smart backoff active.<br>
+                            💤 Waiting for token refresh (checking hourly)...<br>
+                            <br>
+                            <span style="color: #a0a0a0">→ Will resume automatically when tokens refresh</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Features -->
+        <section class="features">
+            <div class="feature-card">
+                <div class="feature-icon">🎯</div>
+                <h3 class="feature-title">Goal-Driven</h3>
+                <p class="feature-desc">Works toward YOUR goals, not just answering questions</p>
+            </div>
+            <div class="feature-card">
+                <div class="feature-icon">⚡</div>
+                <h3 class="feature-title">Autonomous Loop</h3>
+                <p class="feature-desc">Task → Execute → Next Task → Repeat until goal is reached</p>
+            </div>
+            <div class="feature-card">
+                <div class="feature-icon">🏖️</div>
+                <h3 class="feature-title">Smart Rest</h3>
+                <p class="feature-desc">Stops on 429, checks hourly, resumes automatically</p>
+            </div>
+            <div class="feature-card">
+                <div class="feature-icon">🔝</div>
+                <h3 class="feature-title">Priority Queue</h3>
+                <p class="feature-desc">Your urgent instructions jump to the front</p>
+            </div>
+            <div class="feature-card">
+                <div class="feature-icon">🤫</div>
+                <h3 class="feature-title">Silent Mode</h3>
+                <p class="feature-desc">No periodic check-ins. Reports only when you ask</p>
+            </div>
+            <div class="feature-card">
+                <div class="feature-icon">🔒</div>
+                <h3 class="feature-title">Private</h3>
+                <p class="feature-desc">All execution happens on your local machine</p>
+            </div>
+        </section>
+
+        <!-- Workflow -->
+        <section class="workflow">
+            <h2>How It Works</h2>
+            <div class="workflow-steps">
+                <div class="step">
+                    <div class="step-number">1</div>
+                    <div class="step-title">Set Goal</div>
+                    <div class="step-desc">Message CC-Claw via Telegram or Lark</div>
+                </div>
+                <div class="arrow">→</div>
+                <div class="step">
+                    <div class="step-number">2</div>
+                    <div class="step-title">Decompose</div>
+                    <div class="step-desc">AI breaks your goal into actionable tasks</div>
+                </div>
+                <div class="arrow">→</div>
+                <div class="step">
+                    <div class="step-number">3</div>
+                    <div class="step-title">Execute</div>
+                    <div class="step-desc">Claude Code runs tasks on YOUR machine</div>
+                </div>
+                <div class="arrow">→</div>
+                <div class="step">
+                    <div class="step-number">4</div>
+                    <div class="step-title">Iterate</div>
+                    <div class="step-desc">Continues until goal is complete</div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Social -->
+        <section class="social">
+            <h2 style="margin-bottom: 2rem;">Join the Community</h2>
+            <div class="social-links">
+                <a href="https://github.com/onlysyz/cc-claw" class="social-link">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/></svg>
+                    GitHub
+                </a>
+                <a href="https://www.youtube.com/@cc-claw" class="social-link">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M19.615 3.184c-3.604-.246-11.631-.245-15.23 0-3.897.266-4.356 2.62-4.385 8.816.029 6.185.484 8.549 4.385 8.816 3.6.245 11.626.246 15.23 0 3.897-.266 4.356-2.62 4.385-8.816-.029-6.185-.484-8.549-4.385-8.816zm-10.615 12.816v-8l8 3.993-8 4.007z"/></svg>
+                    YouTube
+                </a>
+                <a href="https://twitter.com/cc_claw" class="social-link">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>
+                    Twitter/X
+                </a>
+            </div>
+        </section>
+    </div>
+
+    <footer>
+        <p>CC-Claw — Your tireless AI working companion</p>
+        <p style="margin-top: 0.5rem; font-size: 0.9rem;">Made with ❤️ for developers who want to make every token count</p>
+    </footer>
+</body>
+</html>

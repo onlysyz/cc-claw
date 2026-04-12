@@ -11,6 +11,11 @@ from .config import ClientConfig
 from .scheduler import TaskScheduler
 from .profile import ProfileManager
 from .token_tracker import TokenTracker
+from .tools import (
+    FileProcessor, DataScraper, ApiClient,
+    ProcessManager, SystemInfo, GitHelper, DockerHelper,
+    get_tool
+)
 
 
 logger = logging.getLogger(__name__)
@@ -333,6 +338,12 @@ class ToolExecutor:
 
     async def execute_tool(self, tool_name: str, params: dict) -> str:
         """Execute a tool and return result"""
+        # Try to use tools.py first
+        tool_class = get_tool(tool_name)
+        if tool_class:
+            return await self._execute_from_tools(tool_name, params)
+
+        # Fall back to built-in tools
         if tool_name == "screenshot":
             return await self._screenshot()
         elif tool_name == "list_dir":
@@ -343,6 +354,116 @@ class ToolExecutor:
             return await self._shell(params.get("command", ""))
         else:
             return f"Unknown tool: {tool_name}"
+
+    async def _execute_from_tools(self, tool_name: str, params: dict) -> str:
+        """Execute a tool from tools.py"""
+        try:
+            tool_class = get_tool(tool_name)
+            if not tool_class:
+                return f"Tool not found: {tool_name}"
+
+            # Get static method or class
+            tool = tool_class
+
+            # Map common tool names to methods
+            if tool_name == "file":
+                op = params.get("operation", "read")
+                if op == "read":
+                    return tool.read(params.get("path", ""))
+                elif op == "write":
+                    return str(tool.write(params.get("path", ""), params.get("content", "")))
+                elif op == "append":
+                    return str(tool.append(params.get("path", ""), params.get("content", "")))
+                elif op == "find":
+                    result = tool.find(params.get("pattern", "*"), params.get("path", "."))
+                    return "\n".join(result) if result else "No matches found"
+                elif op == "count_lines":
+                    return str(tool.count_lines(params.get("path", "")))
+                elif op == "search":
+                    results = tool.search(params.get("pattern", ""), params.get("path", "."), params.get("file_type", "*"))
+                    if not results:
+                        return "No matches found"
+                    return "\n".join([f"{r['file']}:{r['line']}: {r['content']}" for r in results[:20]])
+
+            elif tool_name == "scraper":
+                url = params.get("url", "")
+                if not url:
+                    return "URL required"
+                method = params.get("method", "fetch")
+                if method == "fetch":
+                    result = tool.fetch(url, params.get("headers"), params.get("timeout", 30))
+                    return f"Status: {result['status']}\nURL: {result['url']}\n\n{result['content'][:2000]}"
+                elif method == "fetch_json":
+                    result = tool.fetch_json(url, params.get("headers"), params.get("timeout", 30))
+                    return str(result)[:2000]
+                elif method == "extract_links":
+                    html = params.get("html", "")
+                    return "\n".join(tool.extract_links(html, url))
+                elif method == "extract_emails":
+                    return "\n".join(tool.extract_emails(params.get("text", "")))
+                elif method == "extract_ips":
+                    return "\n".join(tool.extract_ips(params.get("text", "")))
+
+            elif tool_name == "api":
+                return str(tool.call(
+                    params.get("url", ""),
+                    params.get("method", "GET"),
+                    params.get("headers"),
+                    params.get("params"),
+                    params.get("json_data"),
+                    params.get("timeout", 30)
+                ))[:2000]
+
+            elif tool_name == "process":
+                if params.get("operation") == "kill":
+                    return str(tool.kill(params.get("pid", 0), params.get("signal", 15)))
+                elif params.get("operation") == "is_running":
+                    return str(tool.is_running(params.get("pattern", "")))
+                else:
+                    processes = tool.list(params.get("pattern", ""))
+                    if not processes:
+                        return "No processes found"
+                    return "\n".join([f"PID {p['pid']}: {p['command'][:60]}" for p in processes[:20]])
+
+            elif tool_name == "system":
+                op = params.get("operation", "disk_usage")
+                if op == "disk_usage":
+                    return str(tool.disk_usage(params.get("path", "/")))
+                elif op == "memory":
+                    return str(tool.memory())
+                elif op == "cpu_load":
+                    return str(tool.cpu_load())
+
+            elif tool_name == "git":
+                op = params.get("operation", "status")
+                if op == "status":
+                    return tool.status()
+                elif op == "diff":
+                    return tool.diff(params.get("file", ""))
+                elif op == "log":
+                    commits = tool.log(params.get("limit", 10))
+                    return "\n".join([f"{c['hash']} | {c['message'][:50]}" for c in commits])
+                elif op == "branch":
+                    return tool.branch()
+
+            elif tool_name == "docker":
+                op = params.get("operation", "ps")
+                if op == "ps":
+                    containers = tool.ps(params.get("all", False))
+                    if not containers:
+                        return "No containers found"
+                    return "\n".join([f"{c['id'][:12]} | {c['name']} | {c['status']}" for c in containers])
+                elif op == "logs":
+                    return tool.logs(params.get("container", ""), params.get("lines", 50))
+                elif op == "restart":
+                    return str(tool.restart(params.get("container", "")))
+                elif op == "status":
+                    return str(tool.status())
+
+            return f"Tool {tool_name} exists but operation not supported"
+
+        except Exception as e:
+            return f"Error executing tool {tool_name}: {e}"
 
     async def _screenshot(self) -> str:
         """Take a screenshot"""

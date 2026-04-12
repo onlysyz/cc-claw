@@ -1,0 +1,1304 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CC-Claw — Your tireless AI working companion</title>
+    <meta name="description" content="Transform your Claude Code tokens into 24/7 autonomous work. CC-Claw breaks goals into tasks, executes them continuously, and never wastes tokens on rate limits.">
+    <meta name="keywords" content="AI, Claude Code, automation, productivity, autonomous, developer tools, telegram bot">
+    <meta property="og:title" content="CC-Claw — Your tireless AI working companion">
+    <meta property="og:description" content="Make every Claude Code token count. 24/7 autonomous work.">
+    <meta property="og:type" content="website">
+    <meta property="og:url" content="https://cc-claw.dev">
+    <meta name="twitter:card" content="summary_large_image">
+    <link rel="canonical" href="https://cc-claw.dev">
+
+    <!-- Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+    <style>
+        :root {
+            --bg-primary: #0a0a0f;
+            --bg-secondary: #111118;
+            --bg-card: #16161d;
+            --bg-card-hover: #1c1c25;
+            --accent-cyan: #00d4ff;
+            --accent-purple: #7b2cbf;
+            --accent-gradient: linear-gradient(135deg, #00d4ff 0%, #7b2cbf 100%);
+            --text-primary: #ffffff;
+            --text-secondary: #a0a0a0;
+            --text-muted: #606060;
+            --border: rgba(255, 255, 255, 0.1);
+            --success: #22c55e;
+            --warning: #f59e0b;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        html {
+            scroll-behavior: smooth;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            line-height: 1.6;
+            overflow-x: hidden;
+        }
+
+        /* Navigation */
+        nav {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            z-index: 100;
+            background: rgba(10, 10, 15, 0.8);
+            backdrop-filter: blur(20px);
+            border-bottom: 1px solid var(--border);
+        }
+
+        .nav-container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 1rem 2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .logo {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            text-decoration: none;
+            color: var(--text-primary);
+        }
+
+        .logo-icon {
+            font-size: 1.75rem;
+        }
+
+        .logo-text {
+            font-size: 1.5rem;
+            font-weight: 700;
+        }
+
+        .nav-links {
+            display: flex;
+            gap: 2rem;
+            align-items: center;
+        }
+
+        .nav-links a {
+            color: var(--text-secondary);
+            text-decoration: none;
+            font-weight: 500;
+            transition: color 0.2s;
+        }
+
+        .nav-links a:hover {
+            color: var(--text-primary);
+        }
+
+        .nav-cta {
+            background: var(--accent-gradient);
+            color: white !important;
+            padding: 0.5rem 1.25rem;
+            border-radius: 50px;
+            font-weight: 600;
+        }
+
+        .nav-cta:hover {
+            opacity: 0.9;
+        }
+
+        /* Hero */
+        .hero {
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            text-align: center;
+            padding: 8rem 2rem 4rem;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .hero::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 150%;
+            height: 100%;
+            background: radial-gradient(ellipse at center top, rgba(0, 212, 255, 0.15) 0%, transparent 60%);
+            pointer-events: none;
+        }
+
+        .hero-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            background: rgba(0, 212, 255, 0.1);
+            border: 1px solid rgba(0, 212, 255, 0.3);
+            padding: 0.5rem 1rem;
+            border-radius: 50px;
+            font-size: 0.875rem;
+            color: var(--accent-cyan);
+            margin-bottom: 2rem;
+        }
+
+        .hero-badge::before {
+            content: '';
+            width: 8px;
+            height: 8px;
+            background: var(--accent-cyan);
+            border-radius: 50%;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        .hero h1 {
+            font-size: clamp(3rem, 8vw, 5rem);
+            font-weight: 800;
+            line-height: 1.1;
+            margin-bottom: 1.5rem;
+            background: var(--accent-gradient);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .hero p {
+            font-size: 1.25rem;
+            color: var(--text-secondary);
+            max-width: 600px;
+            margin-bottom: 2.5rem;
+        }
+
+        .hero-cta {
+            display: flex;
+            gap: 1rem;
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.875rem 1.75rem;
+            border-radius: 50px;
+            font-weight: 600;
+            text-decoration: none;
+            transition: all 0.2s;
+            font-size: 1rem;
+        }
+
+        .btn-primary {
+            background: var(--accent-gradient);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 40px rgba(0, 212, 255, 0.3);
+        }
+
+        .btn-secondary {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            color: var(--text-primary);
+        }
+
+        .btn-secondary:hover {
+            background: var(--bg-card-hover);
+        }
+
+        .hero-stats {
+            display: flex;
+            gap: 3rem;
+            margin-top: 4rem;
+            padding-top: 3rem;
+            border-top: 1px solid var(--border);
+        }
+
+        .stat {
+            text-align: center;
+        }
+
+        .stat-value {
+            font-size: 2rem;
+            font-weight: 700;
+            background: var(--accent-gradient);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .stat-label {
+            font-size: 0.875rem;
+            color: var(--text-muted);
+            margin-top: 0.25rem;
+        }
+
+        /* Problem Section */
+        .problem {
+            padding: 6rem 2rem;
+            background: var(--bg-secondary);
+        }
+
+        .section-container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        .section-label {
+            font-size: 0.875rem;
+            font-weight: 600;
+            color: var(--accent-cyan);
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            margin-bottom: 1rem;
+        }
+
+        .section-title {
+            font-size: clamp(2rem, 4vw, 2.75rem);
+            font-weight: 700;
+            margin-bottom: 1.5rem;
+        }
+
+        .problem-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 1.5rem;
+            margin-top: 3rem;
+        }
+
+        .problem-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 1.5rem;
+        }
+
+        .problem-icon {
+            font-size: 2rem;
+            margin-bottom: 1rem;
+        }
+
+        .problem-card h3 {
+            font-size: 1.125rem;
+            margin-bottom: 0.5rem;
+        }
+
+        .problem-card p {
+            color: var(--text-secondary);
+            font-size: 0.9375rem;
+        }
+
+        /* Features */
+        .features {
+            padding: 6rem 2rem;
+        }
+
+        .features-header {
+            text-align: center;
+            max-width: 700px;
+            margin: 0 auto 4rem;
+        }
+
+        .features-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+            gap: 1.5rem;
+        }
+
+        .feature-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 2rem;
+            transition: all 0.3s;
+        }
+
+        .feature-card:hover {
+            transform: translateY(-4px);
+            border-color: rgba(0, 212, 255, 0.3);
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.3);
+        }
+
+        .feature-icon {
+            width: 56px;
+            height: 56px;
+            background: rgba(0, 212, 255, 0.1);
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.75rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .feature-card h3 {
+            font-size: 1.25rem;
+            margin-bottom: 0.75rem;
+        }
+
+        .feature-card p {
+            color: var(--text-secondary);
+            font-size: 0.9375rem;
+        }
+
+        /* How It Works */
+        .how-it-works {
+            padding: 6rem 2rem;
+            background: var(--bg-secondary);
+        }
+
+        .steps {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+            gap: 2rem;
+            margin-top: 4rem;
+        }
+
+        .step {
+            text-align: center;
+            position: relative;
+        }
+
+        .step-number {
+            width: 64px;
+            height: 64px;
+            background: var(--accent-gradient);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.5rem;
+            font-weight: 700;
+            margin: 0 auto 1.5rem;
+        }
+
+        .step h3 {
+            font-size: 1.25rem;
+            margin-bottom: 0.5rem;
+        }
+
+        .step p {
+            color: var(--text-secondary);
+            font-size: 0.9375rem;
+        }
+
+        .step-arrow {
+            position: absolute;
+            right: -1rem;
+            top: 2rem;
+            font-size: 1.5rem;
+            color: var(--accent-cyan);
+            opacity: 0.5;
+            display: none;
+        }
+
+        @media (min-width: 768px) {
+            .step-arrow {
+                display: block;
+            }
+        }
+
+        /* Demo Terminal */
+        .demo {
+            padding: 6rem 2rem;
+        }
+
+        .demo-container {
+            max-width: 900px;
+            margin: 0 auto;
+        }
+
+        .terminal {
+            background: #0d1117;
+            border-radius: 16px;
+            overflow: hidden;
+            box-shadow: 0 30px 60px rgba(0, 0, 0, 0.5);
+            border: 1px solid var(--border);
+        }
+
+        .terminal-header {
+            background: #161b22;
+            padding: 1rem 1.5rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .terminal-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+        }
+
+        .terminal-dot.red { background: #ff5f57; }
+        .terminal-dot.yellow { background: #febc2e; }
+        .terminal-dot.green { background: #28c840; }
+
+        .terminal-title {
+            margin-left: 1rem;
+            color: var(--text-muted);
+            font-size: 0.875rem;
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        .terminal-body {
+            padding: 1.5rem;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.875rem;
+            line-height: 1.8;
+            min-height: 400px;
+        }
+
+        .terminal-line {
+            margin-bottom: 1rem;
+            animation: fadeSlide 0.3s ease forwards;
+            opacity: 0;
+        }
+
+        @keyframes fadeSlide {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .terminal-line:nth-child(1) { animation-delay: 0.3s; }
+        .terminal-line:nth-child(2) { animation-delay: 0.8s; }
+        .terminal-line:nth-child(3) { animation-delay: 1.3s; }
+        .terminal-line:nth-child(4) { animation-delay: 1.8s; }
+        .terminal-line:nth-child(5) { animation-delay: 2.3s; }
+        .terminal-line:nth-child(6) { animation-delay: 2.8s; }
+
+        .t-user { color: #58a6ff; }
+        .t-bot { color: #7ee787; }
+        .t-info { color: #a0a0a0; }
+        .t-success { color: #22c55e; }
+        .t-warning { color: #f59e0b; }
+        .t-dim { color: #606060; }
+
+        /* Use Cases */
+        .use-cases {
+            padding: 6rem 2rem;
+            background: var(--bg-secondary);
+        }
+
+        .cases-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 1.5rem;
+            margin-top: 3rem;
+        }
+
+        .case-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 2rem;
+            transition: all 0.3s;
+        }
+
+        .case-card:hover {
+            border-color: rgba(0, 212, 255, 0.3);
+        }
+
+        .case-icon {
+            font-size: 2.5rem;
+            margin-bottom: 1rem;
+        }
+
+        .case-card h3 {
+            font-size: 1.25rem;
+            margin-bottom: 0.5rem;
+        }
+
+        .case-card p {
+            color: var(--text-secondary);
+            font-size: 0.9375rem;
+            margin-bottom: 1rem;
+        }
+
+        .case-result {
+            background: rgba(34, 197, 94, 0.1);
+            border: 1px solid rgba(34, 197, 94, 0.2);
+            border-radius: 8px;
+            padding: 0.75rem 1rem;
+            font-size: 0.875rem;
+            color: var(--success);
+        }
+
+        /* Tools */
+        .tools {
+            padding: 6rem 2rem;
+        }
+
+        .tools-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1rem;
+            margin-top: 3rem;
+        }
+
+        .tool-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 1.5rem;
+            text-align: center;
+        }
+
+        .tool-name {
+            font-weight: 600;
+            margin-bottom: 0.5rem;
+        }
+
+        .tool-desc {
+            color: var(--text-muted);
+            font-size: 0.8125rem;
+        }
+
+        /* Quick Start */
+        .quickstart {
+            padding: 6rem 2rem;
+            background: var(--bg-secondary);
+        }
+
+        .code-blocks {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+            gap: 2rem;
+            margin-top: 3rem;
+        }
+
+        @media (max-width: 500px) {
+            .code-blocks {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .code-block {
+            background: #0d1117;
+            border-radius: 12px;
+            overflow: hidden;
+            border: 1px solid var(--border);
+        }
+
+        .code-header {
+            background: #161b22;
+            padding: 0.75rem 1rem;
+            font-size: 0.875rem;
+            color: var(--text-muted);
+            border-bottom: 1px solid var(--border);
+        }
+
+        .code-content {
+            padding: 1.5rem;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.8125rem;
+            overflow-x: auto;
+        }
+
+        .code-content code {
+            color: #c9d1d9;
+            white-space: pre;
+        }
+
+        .code-comment { color: #8b949e; }
+        .code-string { color: #a5d6ff; }
+        .code-keyword { color: #ff7b72; }
+        .code-function { color: #d2a8ff; }
+
+        /* Pricing */
+        .pricing {
+            padding: 6rem 2rem;
+        }
+
+        .pricing-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 1.5rem;
+            margin-top: 3rem;
+            max-width: 900px;
+            margin-left: auto;
+            margin-right: auto;
+        }
+
+        .price-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 2rem;
+            text-align: center;
+            position: relative;
+        }
+
+        .price-card.featured {
+            border-color: var(--accent-cyan);
+            transform: scale(1.05);
+        }
+
+        .price-card.featured::before {
+            content: 'Most Popular';
+            position: absolute;
+            top: -12px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: var(--accent-gradient);
+            padding: 0.25rem 1rem;
+            border-radius: 50px;
+            font-size: 0.75rem;
+            font-weight: 600;
+        }
+
+        .price-tier {
+            font-size: 1.25rem;
+            font-weight: 600;
+            margin-bottom: 0.5rem;
+        }
+
+        .price-amount {
+            font-size: 2.5rem;
+            font-weight: 700;
+            margin-bottom: 0.5rem;
+        }
+
+        .price-amount span {
+            font-size: 1rem;
+            color: var(--text-muted);
+            font-weight: 400;
+        }
+
+        .price-desc {
+            color: var(--text-muted);
+            font-size: 0.875rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .price-features {
+            list-style: none;
+            text-align: left;
+            margin-bottom: 2rem;
+        }
+
+        .price-features li {
+            padding: 0.5rem 0;
+            color: var(--text-secondary);
+            font-size: 0.9375rem;
+        }
+
+        .price-features li::before {
+            content: '✓';
+            color: var(--success);
+            margin-right: 0.5rem;
+        }
+
+        /* CTA */
+        .cta {
+            padding: 6rem 2rem;
+            text-align: center;
+        }
+
+        .cta h2 {
+            font-size: clamp(2rem, 4vw, 3rem);
+            margin-bottom: 1rem;
+        }
+
+        .cta p {
+            color: var(--text-secondary);
+            font-size: 1.125rem;
+            margin-bottom: 2rem;
+            max-width: 500px;
+            margin-left: auto;
+            margin-right: auto;
+        }
+
+        /* Footer */
+        footer {
+            padding: 4rem 2rem 2rem;
+            border-top: 1px solid var(--border);
+        }
+
+        .footer-container {
+            max-width: 1200px;
+            margin: 0 auto;
+            display: grid;
+            grid-template-columns: 2fr repeat(3, 1fr);
+            gap: 3rem;
+        }
+
+        @media (max-width: 768px) {
+            .footer-container {
+                grid-template-columns: 1fr 1fr;
+            }
+        }
+
+        @media (max-width: 500px) {
+            .footer-container {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .footer-brand p {
+            color: var(--text-muted);
+            font-size: 0.875rem;
+            margin-top: 1rem;
+            max-width: 250px;
+        }
+
+        .footer-links h4 {
+            font-size: 0.875rem;
+            font-weight: 600;
+            margin-bottom: 1rem;
+            color: var(--text-primary);
+        }
+
+        .footer-links a {
+            display: block;
+            color: var(--text-muted);
+            text-decoration: none;
+            padding: 0.25rem 0;
+            font-size: 0.875rem;
+            transition: color 0.2s;
+        }
+
+        .footer-links a:hover {
+            color: var(--accent-cyan);
+        }
+
+        .footer-bottom {
+            max-width: 1200px;
+            margin: 3rem auto 0;
+            padding-top: 2rem;
+            border-top: 1px solid var(--border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            color: var(--text-muted);
+            font-size: 0.875rem;
+        }
+
+        .footer-social {
+            display: flex;
+            gap: 1rem;
+        }
+
+        .footer-social a {
+            color: var(--text-muted);
+            font-size: 1.25rem;
+            transition: color 0.2s;
+        }
+
+        .footer-social a:hover {
+            color: var(--accent-cyan);
+        }
+
+        /* Mobile nav */
+        @media (max-width: 768px) {
+            .nav-links {
+                display: none;
+            }
+
+            .hero-stats {
+                flex-direction: column;
+                gap: 1.5rem;
+            }
+        }
+
+        /* Scroll animations */
+        .animate-on-scroll {
+            opacity: 0;
+            transform: translateY(30px);
+            transition: all 0.6s ease;
+        }
+
+        .animate-on-scroll.visible {
+            opacity: 1;
+            transform: translateY(0);
+        }
+    </style>
+</head>
+<body>
+    <!-- Navigation -->
+    <nav>
+        <div class="nav-container">
+            <a href="/" class="logo">
+                <span class="logo-icon">🦞</span>
+                <span class="logo-text">CC-Claw</span>
+            </a>
+            <div class="nav-links">
+                <a href="#features">Features</a>
+                <a href="#how-it-works">How It Works</a>
+                <a href="#demo">Demo</a>
+                <a href="#pricing">Pricing</a>
+                <a href="https://github.com/onlysyz/cc-claw" class="nav-cta">Get Started</a>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Hero -->
+    <section class="hero">
+        <div class="hero-badge">Open Source — MIT License</div>
+        <h1>Your tireless AI<br>working companion</h1>
+        <p>Transform your Claude Code tokens into 24/7 autonomous work. Set a goal, and CC-Claw breaks tasks, executes, and never wastes tokens on rate limits.</p>
+        <div class="hero-cta">
+            <a href="https://github.com/onlysyz/cc-claw" class="btn btn-primary">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/></svg>
+                GitHub
+            </a>
+            <a href="#demo" class="btn btn-secondary">See it in Action</a>
+        </div>
+        <div class="hero-stats">
+            <div class="stat">
+                <div class="stat-value">8+</div>
+                <div class="stat-label">Built-in Tools</div>
+            </div>
+            <div class="stat">
+                <div class="stat-value">24/7</div>
+                <div class="stat-label">Autonomous Work</div>
+            </div>
+            <div class="stat">
+                <div class="stat-value">100%</div>
+                <div class="stat-label">Local Execution</div>
+            </div>
+            <div class="stat">
+                <div class="stat-value">$0</div>
+                <div class="stat-label">Open Source</div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Problem -->
+    <section class="problem">
+        <div class="section-container">
+            <div class="section-label">The Problem</div>
+            <h2 class="section-title">Your Claude tokens are burning a hole in your pocket</h2>
+            <div class="problem-grid">
+                <div class="problem-card">
+                    <div class="problem-icon">💸</div>
+                    <h3>Wasted Investment</h3>
+                    <p>$60-200/month on Claude Code plans. Most tokens sit idle 90% of the time.</p>
+                </div>
+                <div class="problem-card">
+                    <div class="problem-icon">🔄</div>
+                    <h3>Manual Workflow</h3>
+                    <p>Chat, wait, copy-paste, repeat. Manual workflow that burns tokens on retries.</p>
+                </div>
+                <div class="problem-card">
+                    <div class="problem-icon">⏸️</div>
+                    <h3>Idle Time</h3>
+                    <p>Your AI assistant only works when you're at the keyboard. Weekends? Sleeping? Idle.</p>
+                </div>
+                <div class="problem-card">
+                    <div class="problem-icon">⚠️</div>
+                    <h3>Rate Limit Pain</h3>
+                    <p>429 errors burn tokens on retries. No smart backoff. Just wasted resources.</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Features -->
+    <section class="features" id="features">
+        <div class="section-container">
+            <div class="features-header">
+                <div class="section-label">Features</div>
+                <h2 class="section-title">Everything you need for autonomous AI work</h2>
+                <p>CC-Claw wraps Claude Code in a continuous, goal-driven loop that works while you live your life.</p>
+            </div>
+            <div class="features-grid">
+                <div class="feature-card">
+                    <div class="feature-icon">🎯</div>
+                    <h3>Goal-Driven</h3>
+                    <p>Set a goal once. CC-Claw decomposes it into tasks and works toward completion autonomously.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">⚡</div>
+                    <h3>Autonomous Loop</h3>
+                    <p>Task → Execute → Next Task → Repeat. Continuously working until the goal is reached.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">🏖️</div>
+                    <h3>Smart Throttling</h3>
+                    <p>Stops on 429, checks hourly for token refresh, resumes automatically. Never wastes tokens.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">🔝</div>
+                    <h3>Priority Queue</h3>
+                    <p>Your urgent instructions jump to the front of the queue. Emergency? Just send it.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">🤫</div>
+                    <h3>Silent Mode</h3>
+                    <p>No periodic check-ins. Reports only when you ask, or when milestones are reached.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">🔒</div>
+                    <h3>100% Private</h3>
+                    <p>All execution happens on YOUR machine. Your code. Your control. No cloud execution.</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- How It Works -->
+    <section class="how-it-works" id="how-it-works">
+        <div class="section-container">
+            <div class="features-header">
+                <div class="section-label">How It Works</div>
+                <h2 class="section-title">Three steps to autonomous work</h2>
+            </div>
+            <div class="steps">
+                <div class="step">
+                    <div class="step-number">1</div>
+                    <h3>Set Your Goal</h3>
+                    <p>Message CC-Claw via Telegram or Lark. Tell it what you want to achieve.</p>
+                    <span class="step-arrow">→</span>
+                </div>
+                <div class="step">
+                    <div class="step-number">2</div>
+                    <h3>AI Decomposes</h3>
+                    <p>CC-Claw breaks your goal into actionable tasks using AI.</p>
+                    <span class="step-arrow">→</span>
+                </div>
+                <div class="step">
+                    <div class="step-number">3</div>
+                    <h3>Execute & Iterate</h3>
+                    <p>Claude Code runs tasks on YOUR machine. CC-Claw continues until done.</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Demo -->
+    <section class="demo" id="demo">
+        <div class="demo-container">
+            <div class="features-header">
+                <div class="section-label">Live Demo</div>
+                <h2 class="section-title">See CC-Claw in action</h2>
+            </div>
+            <div class="terminal">
+                <div class="terminal-header">
+                    <div class="terminal-dot red"></div>
+                    <div class="terminal-dot yellow"></div>
+                    <div class="terminal-dot green"></div>
+                    <span class="terminal-title">cc-claw — telegram</span>
+                </div>
+                <div class="terminal-body">
+                    <div class="terminal-line t-user">🤖 I want to implement JWT authentication for my Express API</div>
+                    <div class="terminal-line t-bot">✅ Goal set: Implement JWT authentication system</div>
+                    <div class="terminal-line t-info">📋 Decomposing into tasks...</div>
+                    <div class="terminal-line t-success">✓ User model with bcrypt password hashing</div>
+                    <div class="terminal-line t-success">✓ JWT middleware implementation</div>
+                    <div class="terminal-line t-warning">⚠ Rate limit (429) — smart backoff active</div>
+                    <div class="terminal-line t-dim">💤 Waiting... checking hourly for token refresh</div>
+                    <div class="terminal-line t-info" style="margin-top: 2rem; border-top: 1px solid #333; padding-top: 1rem;">
+                        [1 hour later...]
+                    </div>
+                    <div class="terminal-line t-success">✓ Login/register endpoints completed</div>
+                    <div class="terminal-line t-success">✓ Protected routes configured</div>
+                    <div class="terminal-line t-success">✓ Jest tests written</div>
+                    <div class="terminal-line t-bot">🎉 Goal complete! 6/6 tasks done.</div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Use Cases -->
+    <section class="use-cases" id="use-cases">
+        <div class="section-container">
+            <div class="features-header">
+                <div class="section-label">Use Cases</div>
+                <h2 class="section-title">What CC-Claw can do for you</h2>
+            </div>
+            <div class="cases-grid">
+                <div class="case-card">
+                    <div class="case-icon">🐛</div>
+                    <h3>Bug Fixing on Autopilot</h3>
+                    <p>"Fix all critical bugs in the auth module"</p>
+                    <div class="case-result">✅ 12 bugs fixed while you sleep</div>
+                </div>
+                <div class="case-card">
+                    <div class="case-icon">📦</div>
+                    <h3>Feature Development</h3>
+                    <p>"Implement user profile system with avatar upload"</p>
+                    <div class="case-result">✅ Models, API, tests complete in 15 min</div>
+                </div>
+                <div class="case-card">
+                    <div class="case-icon">🚀</div>
+                    <h3>CI/CD Setup</h3>
+                    <p>"Set up GitHub Actions for our Express API"</p>
+                    <div class="case-result">✅ Workflow, tests, deployment configured</div>
+                </div>
+                <div class="case-card">
+                    <div class="case-icon">📚</div>
+                    <h3>Documentation</h3>
+                    <p>"Document the entire API with OpenAPI spec"</p>
+                    <div class="case-result">✅ Full spec + examples generated</div>
+                </div>
+                <div class="case-card">
+                    <div class="case-icon">🧪</div>
+                    <h3>Test Coverage</h3>
+                    <p>"Add tests for all user-related endpoints"</p>
+                    <div class="case-result">✅ 95% coverage achieved</div>
+                </div>
+                <div class="case-card">
+                    <div class="case-icon">🏗️</div>
+                    <h3>Refactoring</h3>
+                    <p>"Migrate from callback to async/await patterns"</p>
+                    <div class="case-result">✅ 50 files refactored automatically</div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Tools -->
+    <section class="tools">
+        <div class="section-container">
+            <div class="features-header">
+                <div class="section-label">Built-in Tools</div>
+                <h2 class="section-title">8 practical tools for common tasks</h2>
+            </div>
+            <div class="tools-grid">
+                <div class="tool-card">
+                    <div class="tool-name">FileProcessor</div>
+                    <div class="tool-desc">Read, write, search files</div>
+                </div>
+                <div class="tool-card">
+                    <div class="tool-name">DataScraper</div>
+                    <div class="tool-desc">Fetch pages, extract data</div>
+                </div>
+                <div class="tool-card">
+                    <div class="tool-name">ApiClient</div>
+                    <div class="tool-desc">HTTP calls with auth</div>
+                </div>
+                <div class="tool-card">
+                    <div class="tool-name">ProcessManager</div>
+                    <div class="tool-desc">List, kill processes</div>
+                </div>
+                <div class="tool-card">
+                    <div class="tool-name">SystemInfo</div>
+                    <div class="tool-desc">Disk, memory, CPU</div>
+                </div>
+                <div class="tool-card">
+                    <div class="tool-name">GitHelper</div>
+                    <div class="tool-desc">Status, diff, log, branch</div>
+                </div>
+                <div class="tool-card">
+                    <div class="tool-name">DockerHelper</div>
+                    <div class="tool-desc">PS, logs, restart</div>
+                </div>
+                <div class="tool-card">
+                    <div class="tool-name">AgentSolveHub</div>
+                    <div class="tool-desc">AI error solutions</div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Quick Start -->
+    <section class="quickstart" id="quickstart">
+        <div class="section-container">
+            <div class="features-header">
+                <div class="section-label">Quick Start</div>
+                <h2 class="section-title">Get started in 5 minutes</h2>
+            </div>
+            <div class="code-blocks">
+                <div class="code-block">
+                    <div class="code-header">Server Setup</div>
+                    <div class="code-content">
+                        <code><span class="code-comment"># Clone the repo</span>
+<span class="code-keyword">git clone</span> https://github.com/onlysyz/cc-claw.git
+<span class="code-keyword">cd</span> cc-claw
+
+<span class="code-comment"># Install dependencies</span>
+<span class="code-keyword">pip install</span> -e .
+
+<span class="code-comment"># Configure</span>
+<span class="code-keyword">cp</span> .env.example .env
+<span class="code-comment"># Edit .env with your TELEGRAM_BOT_TOKEN</span>
+
+<span class="code-comment"># Start server</span>
+<span class="code-function">python</span> run_server.py</code>
+                    </div>
+                </div>
+                <div class="code-block">
+                    <div class="code-header">Client Setup</div>
+                    <div class="code-content">
+                        <code><span class="code-comment"># Install client</span>
+<span class="code-keyword">pip install</span> -e .
+
+<span class="code-comment"># Install CC-Claw</span>
+cc-claw install
+
+<span class="code-comment"># Start the daemon</span>
+cc-claw start
+
+<span class="code-comment"># Message the Telegram bot</span>
+<span class="code-comment"># Send /start to begin onboarding</span></code>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Pricing -->
+    <section class="pricing" id="pricing">
+        <div class="section-container">
+            <div class="features-header">
+                <div class="section-label">Pricing</div>
+                <h2 class="section-title">Free to start. Scale as you grow.</h2>
+            </div>
+            <div class="pricing-grid">
+                <div class="price-card">
+                    <div class="price-tier">FREE</div>
+                    <div class="price-amount">$0<span>/month</span></div>
+                    <div class="price-desc">For individuals getting started</div>
+                    <ul class="price-features">
+                        <li>60 requests/min</li>
+                        <li>1 active goal</li>
+                        <li>Basic tools</li>
+                        <li>Community support</li>
+                    </ul>
+                    <a href="https://github.com/onlysyz/cc-claw" class="btn btn-secondary" style="width: 100%;">Get Started</a>
+                </div>
+                <div class="price-card featured">
+                    <div class="price-tier">PRO</div>
+                    <div class="price-amount">$9<span>/month</span></div>
+                    <div class="price-desc">For developers who want more</div>
+                    <ul class="price-features">
+                        <li>300 requests/min</li>
+                        <li>5 active goals</li>
+                        <li>All tools</li>
+                        <li>Priority support</li>
+                    </ul>
+                    <a href="https://github.com/onlysyz/cc-claw" class="btn btn-primary" style="width: 100%;">Coming Soon</a>
+                </div>
+                <div class="price-card">
+                    <div class="price-tier">ENTERPRISE</div>
+                    <div class="price-amount">$49<span>/month</span></div>
+                    <div class="price-desc">For teams and businesses</div>
+                    <ul class="price-features">
+                        <li>Unlimited requests</li>
+                        <li>Unlimited goals</li>
+                        <li>Team features</li>
+                        <li>Dedicated support</li>
+                    </ul>
+                    <a href="https://github.com/onlysyz/cc-claw" class="btn btn-secondary" style="width: 100%;">Contact Us</a>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- CTA -->
+    <section class="cta">
+        <h2>Start making every token count</h2>
+        <p>Join developers who are already using CC-Claw to get 24/7 autonomous work from their Claude Code plans.</p>
+        <div class="hero-cta">
+            <a href="https://github.com/onlysyz/cc-claw" class="btn btn-primary">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/></svg>
+                Star on GitHub
+            </a>
+        </div>
+    </section>
+
+    <!-- Footer -->
+    <footer>
+        <div class="footer-container">
+            <div class="footer-brand">
+                <a href="/" class="logo">
+                    <span class="logo-icon">🦞</span>
+                    <span class="logo-text">CC-Claw</span>
+                </a>
+                <p>Your tireless AI working companion. Making every token count since 2024.</p>
+            </div>
+            <div class="footer-links">
+                <h4>Product</h4>
+                <a href="#features">Features</a>
+                <a href="#demo">Demo</a>
+                <a href="#pricing">Pricing</a>
+                <a href="#quickstart">Quick Start</a>
+            </div>
+            <div class="footer-links">
+                <h4>Resources</h4>
+                <a href="https://github.com/onlysyz/cc-claw">GitHub</a>
+                <a href="https://github.com/onlysyz/cc-claw/wiki">Documentation</a>
+                <a href="https://github.com/onlysyz/cc-claw/discussions">Discussions</a>
+                <a href="https://github.com/onlysyz/cc-claw/issues">Issues</a>
+            </div>
+            <div class="footer-links">
+                <h4>Community</h4>
+                <a href="https://twitter.com/cc_claw">Twitter</a>
+                <a href="https://youtube.com/@cc-claw">YouTube</a>
+                <a href="https://discord.gg/cc-claw">Discord</a>
+            </div>
+        </div>
+        <div class="footer-bottom">
+            <span>© 2024 CC-Claw. MIT License.</span>
+            <div class="footer-social">
+                <a href="https://github.com/onlysyz/cc-claw" title="GitHub">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/></svg>
+                </a>
+                <a href="https://twitter.com/cc_claw" title="Twitter">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>
+                </a>
+            </div>
+        </div>
+    </footer>
+
+    <script>
+        // Scroll animations
+        const observerOptions = {
+            threshold: 0.1,
+            rootMargin: '0px 0px -50px 0px'
+        };
+
+        const observer = new IntersectionObserver((entries) => {
+            entries.forEach(entry => {
+                if (entry.isIntersecting) {
+                    entry.target.classList.add('visible');
+                }
+            });
+        }, observerOptions);
+
+        document.querySelectorAll('.animate-on-scroll').forEach(el => {
+            observer.observe(el);
+        });
+
+        // Add animation class to sections
+        document.querySelectorAll('.problem-card, .feature-card, .case-card, .step, .tool-card, .price-card').forEach(el => {
+            el.classList.add('animate-on-scroll');
+        });
+
+        // Smooth scroll for anchor links
+        document.querySelectorAll('a[href^="#"]').forEach(anchor => {
+            anchor.addEventListener('click', function(e) {
+                e.preventDefault();
+                const target = document.querySelector(this.getAttribute('href'));
+                if (target) {
+                    target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                }
+            });
+        });
+    </script>
+</body>
+</html>
