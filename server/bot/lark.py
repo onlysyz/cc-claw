@@ -61,8 +61,8 @@ class LarkBot:
         try:
             from lark_oapi.api.im.v1.model.p2_im_message_receive_v1 import P2ImMessageReceiveV1
 
-            async def handle_event(event: P2ImMessageReceiveV1):
-                await self._handle_message(event)
+            def handle_event(event: P2ImMessageReceiveV1):
+                self._handle_message(event)
 
             handler = (EventDispatcherHandler
                 .builder('', '')
@@ -143,7 +143,7 @@ class LarkBot:
         except Exception as e:
             logger.error(f"Error sending Lark message: {e}")
 
-    async def _handle_message(self, event):
+    def _handle_message(self, event):
         """Handle incoming message from Lark"""
         try:
             sender = event.event.sender
@@ -196,7 +196,7 @@ class LarkBot:
         except Exception as e:
             logger.error(f"Error handling Lark message: {e}", exc_info=True)
 
-    async def _handle_onboarding_message(self, open_id: str, text: str, user: dict):
+    def _handle_onboarding_message(self, open_id: str, text: str, user: dict):
         """Handle onboarding messages"""
         from ..services.storage import storage
 
@@ -221,17 +221,23 @@ class LarkBot:
                 device = storage.get_user_device(user_id)
                 if device:
                     from ..ws import ws_server
-                    await ws_server.send_profile_to_device(
-                        device["id"],
-                        profile_data={
-                            "profession": onboarding_data.get("profession", ""),
-                            "situation": onboarding_data.get("situation", ""),
-                            "short_term_goal": onboarding_data.get("goal", ""),
-                            "what_better_means": onboarding_data.get("better", ""),
-                        },
-                        lark_open_id=open_id,
-                        message_id=None,  # no Lark message_id - not a task
-                    )
+                    import asyncio
+                    async def _send():
+                        await ws_server.send_profile_to_device(
+                            device["id"],
+                            profile_data={
+                                "profession": onboarding_data.get("profession", ""),
+                                "situation": onboarding_data.get("situation", ""),
+                                "short_term_goal": onboarding_data.get("goal", ""),
+                                "what_better_means": onboarding_data.get("better", ""),
+                            },
+                            lark_open_id=open_id,
+                            message_id=None,
+                        )
+                    loop = asyncio.new_event_loop()
+                    t = threading.Thread(target=lambda: loop.run_until_complete(_send()), daemon=True)
+                    t.start()
+                    t.join()  # wait for it to finish before continuing
 
             self._send_lark_message(open_id,
                 "✅ 初始化完成！\n\n"
