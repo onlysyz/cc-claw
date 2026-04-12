@@ -90,6 +90,16 @@ class MessageHandler:
                 await self._handle_goals_command(message_id, lark_open_id)
                 return
 
+            # Check for /setgoal <id> command
+            if content.strip().startswith("/setgoal "):
+                parts = content.strip().split(" ", 1)
+                if len(parts) > 1:
+                    goal_id = parts[1].strip()
+                    await self._handle_setgoal_command(goal_id, message_id, lark_open_id)
+                else:
+                    await self.ws.send_message("❌ 用法: /setgoal <goal_id>\n先用 /goals 查看所有目标及其ID", message_id, [], lark_open_id)
+                return
+
             # User message — if priority, insert at front of queue (don't execute now)
             if is_priority and self.queue_manager:
                 # Enqueue for autonomous execution (user's command goes to front)
@@ -202,8 +212,15 @@ class MessageHandler:
         await self.ws.send_message(response, message_id, [], lark_open_id)
 
     async def _handle_progress_command(self, message_id: str, lark_open_id: str = None):
-        """Handle /progress command"""
-        response = self.profile.format_progress()
+        """Handle /progress command - enhanced with queue status"""
+        lines = [self.profile.format_progress()]
+
+        # Add queue status if queue_manager available
+        if self.queue_manager:
+            queue_status = self.queue_manager.format_status()
+            lines.append("\n" + queue_status)
+
+        response = "\n".join(lines)
         await self.ws.send_message(response, message_id, [], lark_open_id)
 
     async def _handle_pause_command(self, message_id: str, lark_open_id: str = None):
@@ -221,18 +238,39 @@ class MessageHandler:
         await self.ws.send_message(response, message_id, [], lark_open_id)
 
     async def _handle_goals_command(self, message_id: str, lark_open_id: str = None):
-        """Handle /goals command"""
-        active_goals = self.profile.get_active_goals()
-        if not active_goals:
-            response = "🎯 No active goals. Complete onboarding to set your first goal."
+        """Handle /goals command - shows all goals with status"""
+        all_goals = self.profile.goals
+        if not all_goals:
+            response = "🎯 No goals yet. Complete onboarding to set your first goal."
         else:
-            lines = ["🎯 **Active Goals**\n"]
-            for g in active_goals:
+            lines = ["🎯 **Goals**\n"]
+            for g in all_goals:
                 tasks = self.profile.get_tasks_for_goal(g.id)
                 completed = len([t for t in tasks if t.status.value == "completed"])
                 total = len(tasks)
-                lines.append(f"• {g.description} ({completed}/{total} tasks)")
+                status_map = {"active": "🟢", "completed": "✅", "paused": "⏸️"}
+                marker = status_map.get(g.status.value, "⚪")
+                active_marker = " ◀" if g.id == self.profile.active_goal_id else ""
+                lines.append(f"{marker} [{g.id[:8]}] {g.description}")
+                lines.append(f"   {completed}/{total} tasks{active_marker}")
+            lines.append("\n◀ = currently working on")
+            lines.append("Use /setgoal <id> to switch")
             response = "\n".join(lines)
+        await self.ws.send_message(response, message_id, [], lark_open_id)
+
+    async def _handle_setgoal_command(self, goal_id: str, message_id: str, lark_open_id: str = None):
+        """Handle /setgoal <id> command - switch active goal"""
+        success = self.profile.set_active_goal(goal_id)
+        if success:
+            goal = None
+            for g in self.profile.goals:
+                if g.id == goal_id:
+                    goal = g
+                    break
+            response = f"✅ 已切换到目标:\n[{goal_id[:8]}] {goal.description if goal else goal_id}"
+            logger.info(f"Switched active goal to {goal_id}")
+        else:
+            response = f"❌ 未找到目标 {goal_id}，或目标不是 active 状态。\n先用 /goals 查看所有目标。"
         await self.ws.send_message(response, message_id, [], lark_open_id)
 
     async def handle_tasks_request(self, message: Message):

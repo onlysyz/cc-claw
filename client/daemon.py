@@ -189,17 +189,16 @@ class CCClawDaemon:
                     await asyncio.sleep(wait_seconds)
                     continue
 
-                # Get active goals
-                active_goals = self.profile.get_active_goals()
-                if not active_goals:
+                # Get active goal (the one we're currently working on)
+                goal = self.profile.get_active_goal()
+                if not goal:
                     # No active goals yet — wait
                     if loop_count % 60 == 0:  # Log every ~5 min
                         logger.info("No active goals, waiting...")
                     await asyncio.sleep(5)
                     continue
 
-                # Pick the first active goal
-                goal = active_goals[0]
+                logger.info(f"Working on goal: {goal.description}")
 
                 # Check if goal needs decomposition
                 pending = [t for t in self.profile.get_tasks_for_goal(goal.id)

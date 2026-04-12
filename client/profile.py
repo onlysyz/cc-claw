@@ -147,6 +147,7 @@ class ProfileManager:
         self.goals: List[Goal] = []
         self.tasks: List[Task] = []
         self.token_budget = TokenBudget()
+        self.active_goal_id: Optional[str] = None
         self._load()
 
     def _get_default_path(self) -> Path:
@@ -166,6 +167,7 @@ class ProfileManager:
                     self.goals = [Goal.from_dict(g) for g in data.get("goals", [])]
                     self.tasks = [Task.from_dict(t) for t in data.get("tasks", [])]
                     self.token_budget = TokenBudget.from_dict(data.get("token_budget", {}))
+                    self.active_goal_id = data.get("active_goal_id")
             except (json.JSONDecodeError, Exception) as e:
                 print(f"Error loading profile: {e}")
                 self._init_empty()
@@ -177,6 +179,7 @@ class ProfileManager:
         self.goals = []
         self.tasks = []
         self.token_budget = TokenBudget()
+        self.active_goal_id = None
 
     def _save(self):
         path = self._get_default_path()
@@ -187,6 +190,7 @@ class ProfileManager:
             "goals": [g.to_dict() for g in self.goals],
             "tasks": [t.to_dict() for t in self.tasks],
             "token_budget": self.token_budget.to_dict(),
+            "active_goal_id": self.active_goal_id,
         }
         with open(temp_path, "w") as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
@@ -214,11 +218,43 @@ class ProfileManager:
         import uuid
         goal = Goal(id=str(uuid.uuid4())[:8], description=description)
         self.goals.append(goal)
+        # Auto-set as active goal if none set yet
+        if self.active_goal_id is None:
+            self.active_goal_id = goal.id
         self._save()
         return goal
 
     def get_active_goals(self) -> List[Goal]:
         return [g for g in self.goals if g.status == GoalStatus.ACTIVE]
+
+    def get_active_goal(self) -> Optional[Goal]:
+        """Get the currently active goal (the one runner is working on)"""
+        if not self.active_goal_id:
+            # Fall back to first active goal
+            active = self.get_active_goals()
+            if active:
+                self.active_goal_id = active[0].id
+                return active[0]
+            return None
+        for g in self.goals:
+            if g.id == self.active_goal_id and g.status == GoalStatus.ACTIVE:
+                return g
+        # active_goal_id is no longer valid, pick first active
+        active = self.get_active_goals()
+        if active:
+            self.active_goal_id = active[0].id
+            return active[0]
+        self.active_goal_id = None
+        return None
+
+    def set_active_goal(self, goal_id: str) -> bool:
+        """Set which goal is the active (working) goal"""
+        for g in self.goals:
+            if g.id == goal_id and g.status == GoalStatus.ACTIVE:
+                self.active_goal_id = goal_id
+                self._save()
+                return True
+        return False
 
     def complete_goal(self, goal_id: str):
         for g in self.goals:
