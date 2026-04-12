@@ -345,6 +345,467 @@ class DockerHelper:
         return info
 
 
+class DatabaseTool:
+    """SQLite database utilities"""
+
+    @staticmethod
+    def query(db_path: str, sql: str) -> List[Dict]:
+        """Execute SQL query and return results"""
+        try:
+            import sqlite3
+            conn = sqlite3.connect(db_path)
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            cursor.execute(sql)
+
+            if sql.strip().upper().startswith('SELECT'):
+                rows = cursor.fetchall()
+                result = [dict(row) for row in rows]
+            else:
+                conn.commit()
+                result = [{'affected_rows': cursor.rowcount}]
+
+            conn.close()
+            return result
+        except Exception as e:
+            return [{'error': str(e)}]
+
+    @staticmethod
+    def execute(db_path: str, sql: str) -> Dict:
+        """Execute SQL statement (INSERT/UPDATE/DELETE)"""
+        try:
+            import sqlite3
+            conn = sqlite3.connect(db_path)
+            cursor = conn.cursor()
+            cursor.execute(sql)
+            conn.commit()
+            result = {
+                'rowcount': cursor.rowcount,
+                'lastrowid': cursor.lastrowid
+            }
+            conn.close()
+            return result
+        except Exception as e:
+            return {'error': str(e)}
+
+    @staticmethod
+    def list_tables(db_path: str) -> List[str]:
+        """List all tables in database"""
+        try:
+            import sqlite3
+            conn = sqlite3.connect(db_path)
+            cursor = conn.cursor()
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            tables = [row[0] for row in cursor.fetchall()]
+            conn.close()
+            return tables
+        except Exception as e:
+            return [str(e)]
+
+    @staticmethod
+    def table_info(db_path: str, table: str) -> List[Dict]:
+        """Get table schema"""
+        try:
+            import sqlite3
+            conn = sqlite3.connect(db_path)
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            cursor.execute(f"PRAGMA table_info({table})")
+            result = [dict(row) for row in cursor.fetchall()]
+            conn.close()
+            return result
+        except Exception as e:
+            return [{'error': str(e)}]
+
+    @staticmethod
+    def create_table(db_path: str, table: str, columns: Dict) -> bool:
+        """Create table with columns {name: type}"""
+        try:
+            import sqlite3
+            cols = ', '.join([f"{k} {v}" for k, v in columns.items()])
+            sql = f"CREATE TABLE IF NOT EXISTS {table} ({cols})"
+            conn = sqlite3.connect(db_path)
+            conn.execute(sql)
+            conn.commit()
+            conn.close()
+            return True
+        except Exception as e:
+            return False
+
+
+class ImageTool:
+    """Image processing utilities"""
+
+    @staticmethod
+    def info(path: str) -> Dict:
+        """Get image info (dimensions, format, size)"""
+        try:
+            from PIL import Image
+            img = Image.open(path)
+            return {
+                'width': img.width,
+                'height': img.height,
+                'format': img.format,
+                'mode': img.mode,
+                'size_bytes': os.path.getsize(path)
+            }
+        except Exception as e:
+            return {'error': str(e)}
+
+    @staticmethod
+    def resize(path: str, output: str, width: int, height: int) -> bool:
+        """Resize image to dimensions"""
+        try:
+            from PIL import Image
+            img = Image.open(path)
+            resized = img.resize((width, height), Image.Resampling.LANCZOS)
+            resized.save(output)
+            return True
+        except Exception as e:
+            return False
+
+    @staticmethod
+    def thumbnail(path: str, output: str, max_size: int = 256) -> bool:
+        """Create thumbnail"""
+        try:
+            from PIL import Image
+            img = Image.open(path)
+            img.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
+            img.save(output)
+            return True
+        except Exception as e:
+            return False
+
+    @staticmethod
+    def convert(input_path: str, output_path: str, format: str = 'PNG') -> bool:
+        """Convert image format (JPEG, PNG, WEBP, etc.)"""
+        try:
+            from PIL import Image
+            img = Image.open(input_path)
+            if format.upper() == 'JPEG' and img.mode in ('RGBA', 'LA', 'P'):
+                img = img.convert('RGB')
+            img.save(output_path, format=format.upper())
+            return True
+        except Exception as e:
+            return False
+
+    @staticmethod
+    def compress(path: str, output: str, quality: int = 85) -> bool:
+        """Compress image (JPEG)"""
+        try:
+            from PIL import Image
+            img = Image.open(path)
+            if img.mode in ('RGBA', 'LA', 'P'):
+                img = img.convert('RGB')
+            img.save(output, 'JPEG', quality=quality, optimize=True)
+            return True
+        except Exception as e:
+            return False
+
+
+class NotificationTool:
+    """Notification utilities (Email, Push)"""
+
+    @staticmethod
+    def send_email(
+        to: str,
+        subject: str,
+        body: str,
+        smtp_host: str = 'localhost',
+        smtp_port: int = 25,
+        from_addr: str = 'cc-claw@localhost'
+    ) -> Dict:
+        """Send email notification"""
+        try:
+            import smtplib
+            from email.mime.text import MIMEText
+            from email.mime.multipart import MIMEMultipart
+
+            msg = MIMEMultipart()
+            msg['From'] = from_addr
+            msg['To'] = to
+            msg['Subject'] = subject
+            msg.attach(MIMEText(body, 'plain'))
+
+            with smtplib.SMTP(smtp_host, smtp_port) as server:
+                server.send_message(msg)
+
+            return {'success': True, 'to': to}
+        except Exception as e:
+            return {'success': False, 'error': str(e)}
+
+    @staticmethod
+    def push(title: str, body: str, priority: str = 'normal') -> Dict:
+        """Send push notification via local notify-send or Slack webhook"""
+        try:
+            # Try notify-send (Linux)
+            if os.path.exists('/usr/bin/notify-send'):
+                urgency = 'low' if priority == 'low' else ('critical' if priority == 'high' else 'normal')
+                subprocess.run(['notify-send', '-u', urgency, title, body])
+                return {'success': True, 'method': 'notify-send'}
+
+            # Try terminal-notifier (macOS)
+            if os.path.exists('/usr/local/bin/terminal-notifier'):
+                subprocess.run(['terminal-notifier', '-title', title, '-message', body])
+                return {'success': True, 'method': 'terminal-notifier'}
+
+            return {'success': False, 'error': 'No notification tool available'}
+        except Exception as e:
+            return {'success': False, 'error': str(e)}
+
+    @staticmethod
+    def slack_webhook(webhook_url: str, text: str, channel: str = '') -> Dict:
+        """Send Slack notification via webhook"""
+        try:
+            payload = {'text': text}
+            if channel:
+                payload['channel'] = channel
+            response = requests.post(
+                webhook_url,
+                json=payload,
+                headers={'Content-Type': 'application/json'},
+                timeout=10
+            )
+            return {'success': response.status_code == 200, 'status': response.status_code}
+        except Exception as e:
+            return {'success': False, 'error': str(e)}
+
+
+class CodeAnalysisTool:
+    """Static code analysis utilities"""
+
+    @staticmethod
+    def count_lines(path: str, extensions: str = 'py,js,ts,java,cpp,c,go,rs') -> Dict:
+        """Count lines of code by language"""
+        try:
+            exts = extensions.split(',')
+            total = 0
+            by_lang = {}
+
+            for root, dirs, files in os.walk(path):
+                # Skip common non-code directories
+                dirs[:] = [d for d in dirs if d not in ['node_modules', '__pycache__', '.git', 'venv', 'env', 'dist', 'build']]
+
+                for file in files:
+                    if any(file.endswith(f'.{ext}') for ext in exts):
+                        file_path = os.path.join(root, file)
+                        try:
+                            with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                                lines = len(f.readlines())
+                            total += lines
+                            ext = os.path.splitext(file)[1][1:]
+                            by_lang[ext] = by_lang.get(ext, 0) + lines
+                        except:
+                            pass
+
+            return {'total': total, 'by_language': by_lang}
+        except Exception as e:
+            return {'error': str(e)}
+
+    @staticmethod
+    def find_functions(path: str, language: str = 'python') -> List[Dict]:
+        """Find function definitions in code"""
+        patterns = {
+            'python': r'def\s+(\w+)\s*\(([^)]*)\)',
+            'javascript': r'(?:function\s+(\w+)\s*\(([^)]*)\)|const\s+(\w+)\s*=\s*(?:async\s*)?\([^)]*\)\s*=>)',
+            'java': r'(?:public|private|protected)\s+(?:static\s+)?(?:void|int|String|\w+)\s+(\w+)\s*\(([^)]*)\)',
+            'go': r'func\s+(?:\([^)]+\)\s+)?(\w+)\s*\(([^)]*)\)',
+        }
+
+        try:
+            pattern = patterns.get(language.lower(), patterns['python'])
+            results = []
+
+            for root, dirs, files in os.walk(path):
+                dirs[:] = [d for d in dirs if d not in ['node_modules', '__pycache__', '.git', 'venv']]
+
+                for file in files:
+                    file_path = os.path.join(root, file)
+                    try:
+                        with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                            for i, line in enumerate(f, 1):
+                                match = re.search(pattern, line)
+                                if match:
+                                    name = match.group(1)
+                                    params = match.group(2) if match.lastindex >= 2 else ''
+                                    results.append({
+                                        'file': file_path,
+                                        'line': i,
+                                        'name': name,
+                                        'params': params.strip()
+                                    })
+                    except:
+                        pass
+
+            return results
+        except Exception as e:
+            return [{'error': str(e)}]
+
+    @staticmethod
+    def complexity(path: str, language: str = 'python') -> Dict:
+        """Estimate code complexity (cyclomatic approximation)"""
+        try:
+            keywords = ['if', 'elif', 'else', 'for', 'while', 'and', 'or', 'try', 'except', 'with']
+            total_complexity = 0
+            files_analyzed = 0
+
+            for root, dirs, files in os.walk(path):
+                dirs[:] = [d for d in dirs if d not in ['node_modules', '__pycache__', '.git', 'venv']]
+
+                for file in files:
+                    if file.endswith(f'.{language}'):
+                        file_path = os.path.join(root, file)
+                        try:
+                            with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                                content = f.read()
+                            complexity = 1 + sum(content.count(kw) for kw in keywords)
+                            total_complexity += complexity
+                            files_analyzed += 1
+                        except:
+                            pass
+
+            return {
+                'total_complexity': total_complexity,
+                'files_analyzed': files_analyzed,
+                'avg_complexity': round(total_complexity / files_analyzed, 1) if files_analyzed > 0 else 0
+            }
+        except Exception as e:
+            return {'error': str(e)}
+
+    @staticmethod
+    def dependencies(path: str) -> Dict:
+        """Analyze code dependencies (imports/requires)"""
+        try:
+            imports = {}
+
+            for root, dirs, files in os.walk(path):
+                dirs[:] = [d for d in dirs if d not in ['node_modules', '__pycache__', '.git', 'venv']]
+
+                for file in files:
+                    if file.endswith(('.py', '.js', '.ts', '.go')):
+                        file_path = os.path.join(root, file)
+                        try:
+                            with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                                content = f.read()
+
+                            if file.endswith('.py'):
+                                # Python imports
+                                py_imports = re.findall(r'^(?:from\s+([\w.]+)\s+import|import\s+([\w.]+))', content, re.MULTILINE)
+                                for imp in py_imports:
+                                    mod = imp[0] or imp[1]
+                                    imports[mod] = imports.get(mod, 0) + 1
+                            elif file.endswith(('.js', '.ts')):
+                                # JS/TS imports
+                                js_imports = re.findall(r'(?:require\([\'"]([^\'"]+)[\'"]\)|from\s+[\'"]([^\'"]+)[\'"]\s+import)', content)
+                                for imp in js_imports:
+                                    mod = imp[0] or imp[1]
+                                    imports[mod] = imports.get(mod, 0) + 1
+                        except:
+                            pass
+
+            # Sort by frequency
+            sorted_imports = dict(sorted(imports.items(), key=lambda x: x[1], reverse=True)[:50])
+            return {'dependencies': sorted_imports, 'total_unique': len(imports)}
+        except Exception as e:
+            return {'error': str(e)}
+
+
+class MonitorTool:
+    """System monitoring with alerting"""
+
+    @staticmethod
+    def check_disk(threshold: int = 90) -> Dict:
+        """Check disk usage and alert if threshold exceeded"""
+        usage = SystemInfo.disk_usage('/')
+        percent = usage.get('percent', 0)
+        return {
+            'alert': percent >= threshold,
+            'percent': percent,
+            'total_gb': round(usage.get('total', 0) / (1024**3), 2),
+            'free_gb': round(usage.get('free', 0) / (1024**3), 2),
+            'threshold': threshold
+        }
+
+    @staticmethod
+    def check_memory(threshold: int = 90) -> Dict:
+        """Check memory usage and alert if threshold exceeded"""
+        mem = SystemInfo.memory()
+
+        # Parse /proc/meminfo values (in KB)
+        total = int(mem.get('MemTotal', '0').split()[0]) if 'MemTotal' in mem else 0
+        available = int(mem.get('MemAvailable', mem.get('MemFree', '0')).split()[0]) if 'MemAvailable' in mem or 'MemFree' in mem else 0
+        used = total - available
+
+        if total > 0:
+            percent = round((used / total) * 100, 1)
+        else:
+            percent = 0
+
+        return {
+            'alert': percent >= threshold,
+            'percent': percent,
+            'total_mb': round(total / 1024, 2),
+            'used_mb': round(used / 1024, 2),
+            'free_mb': round(available / 1024, 2),
+            'threshold': threshold
+        }
+
+    @staticmethod
+    def check_cpu(threshold: float = 80.0) -> Dict:
+        """Check CPU load and alert if threshold exceeded"""
+        load = SystemInfo.cpu_load()
+        load_1min = load.get('1min', 0)
+
+        return {
+            'alert': load_1min >= threshold,
+            'load_1min': load_1min,
+            'load_5min': load.get('5min', 0),
+            'load_15min': load.get('15min', 0),
+            'threshold': threshold
+        }
+
+    @staticmethod
+    def check_port(port: int, host: str = 'localhost') -> Dict:
+        """Check if a port is open"""
+        import socket
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(2)
+        try:
+            result = sock.connect_ex((host, port))
+            sock.close()
+            return {'port_open': result == 0, 'port': port, 'host': host}
+        except Exception as e:
+            return {'port_open': False, 'port': port, 'host': host, 'error': str(e)}
+
+    @staticmethod
+    def check_url(url: str, timeout: int = 10) -> Dict:
+        """Check if URL is reachable"""
+        try:
+            response = requests.get(url, timeout=timeout)
+            return {
+                'reachable': True,
+                'status': response.status_code,
+                'url': url,
+                'response_time_ms': int(response.elapsed.total_seconds() * 1000)
+            }
+        except Exception as e:
+            return {
+                'reachable': False,
+                'url': url,
+                'error': str(e)
+            }
+
+    @staticmethod
+    def health_check(port: int = 3000) -> Dict:
+        """Run comprehensive health check"""
+        return {
+            'disk': MonitorTool.check_disk(),
+            'memory': MonitorTool.check_memory(),
+            'cpu': MonitorTool.check_cpu(),
+            'port_open': MonitorTool.check_port(port),
+        }
+
+
 # Tool registry for CC-Claw
 TOOLS = {
     'file': FileProcessor,
@@ -354,6 +815,11 @@ TOOLS = {
     'system': SystemInfo,
     'git': GitHelper,
     'docker': DockerHelper,
+    'database': DatabaseTool,
+    'image': ImageTool,
+    'notification': NotificationTool,
+    'code_analysis': CodeAnalysisTool,
+    'monitor': MonitorTool,
 }
 
 

@@ -460,6 +460,119 @@ class ToolExecutor:
                 elif op == "status":
                     return str(tool.status())
 
+            elif tool_name == "database":
+                op = params.get("operation", "query")
+                if op == "query":
+                    result = tool.query(params.get("db_path", ""), params.get("sql", ""))
+                    return str(result)[:2000]
+                elif op == "execute":
+                    return str(tool.execute(params.get("db_path", ""), params.get("sql", "")))
+                elif op == "list_tables":
+                    return "\n".join(tool.list_tables(params.get("db_path", "")))
+                elif op == "table_info":
+                    return str(tool.table_info(params.get("db_path", ""), params.get("table", "")))
+                elif op == "create_table":
+                    return str(tool.create_table(
+                        params.get("db_path", ""),
+                        params.get("table", ""),
+                        params.get("columns", {})
+                    ))
+
+            elif tool_name == "image":
+                op = params.get("operation", "info")
+                if op == "info":
+                    return str(tool.info(params.get("path", "")))
+                elif op == "resize":
+                    return str(tool.resize(
+                        params.get("path", ""),
+                        params.get("output", ""),
+                        params.get("width", 100),
+                        params.get("height", 100)
+                    ))
+                elif op == "thumbnail":
+                    return str(tool.thumbnail(
+                        params.get("path", ""),
+                        params.get("output", ""),
+                        params.get("max_size", 256)
+                    ))
+                elif op == "convert":
+                    return str(tool.convert(
+                        params.get("input_path", ""),
+                        params.get("output_path", ""),
+                        params.get("format", "PNG")
+                    ))
+                elif op == "compress":
+                    return str(tool.compress(
+                        params.get("path", ""),
+                        params.get("output", ""),
+                        params.get("quality", 85)
+                    ))
+
+            elif tool_name == "notification":
+                op = params.get("operation", "push")
+                if op == "email":
+                    return str(tool.send_email(
+                        params.get("to", ""),
+                        params.get("subject", ""),
+                        params.get("body", ""),
+                        params.get("smtp_host", "localhost"),
+                        params.get("smtp_port", 25),
+                        params.get("from_addr", "cc-claw@localhost")
+                    ))
+                elif op == "push":
+                    return str(tool.push(
+                        params.get("title", ""),
+                        params.get("body", ""),
+                        params.get("priority", "normal")
+                    ))
+                elif op == "slack":
+                    return str(tool.slack_webhook(
+                        params.get("webhook_url", ""),
+                        params.get("text", ""),
+                        params.get("channel", "")
+                    ))
+
+            elif tool_name == "code_analysis":
+                op = params.get("operation", "count_lines")
+                if op == "count_lines":
+                    return str(tool.count_lines(
+                        params.get("path", "."),
+                        params.get("extensions", "py,js,ts,java,cpp,c,go,rs")
+                    ))
+                elif op == "find_functions":
+                    return str(tool.find_functions(
+                        params.get("path", "."),
+                        params.get("language", "python")
+                    ))
+                elif op == "complexity":
+                    return str(tool.complexity(
+                        params.get("path", "."),
+                        params.get("language", "python")
+                    ))
+                elif op == "dependencies":
+                    return str(tool.dependencies(params.get("path", ".")))
+
+            elif tool_name == "monitor":
+                op = params.get("operation", "health_check")
+                if op == "check_disk":
+                    return str(tool.check_disk(params.get("threshold", 90)))
+                elif op == "check_memory":
+                    return str(tool.check_memory(params.get("threshold", 90)))
+                elif op == "check_cpu":
+                    return str(tool.check_cpu(params.get("threshold", 80.0)))
+                elif op == "check_port":
+                    return str(tool.check_port(
+                        params.get("port", 80),
+                        params.get("host", "localhost")
+                    ))
+                elif op == "check_url":
+                    return str(tool.check_url(
+                        params.get("url", ""),
+                        params.get("timeout", 10)
+                    ))
+                elif op == "health_check":
+                    return str(tool.health_check(params.get("port", 3000)))
+
             return f"Tool {tool_name} exists but operation not supported"
 
         except Exception as e:
