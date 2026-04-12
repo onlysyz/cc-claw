@@ -1,179 +1,137 @@
 # CC-Claw
 
-Remotely control Claude Code CLI through Telegram or Lark (Feishu).
+Your tireless AI partner — continuously working to make you better, not just answering questions.
 
 ## What is CC-Claw?
 
-CC-Claw is a gateway service that allows you to control your local Claude Code CLI through messaging bots. Send messages from Telegram or Lark, and CC-Claw forwards them to your local machine, executes them with Claude Code, and returns the results.
+CC-Claw is an **autonomous AI working companion** that turns your Claude coding plan tokens into continuous progress toward your goals. Unlike a chatbot that waits for your input, CC-Claw is always on — consuming your tokens purposefully, breaking down your goals into tasks, executing them, and generating the next step.
+
+> **Token is resources. Wasted if unused. CC-Claw makes every token count.**
+
+## Core Philosophy
+
+**"凡事发生皆有利于我"** — Everything that happens benefits me.
+
+CC-Claw learns who you are, understands what you want to achieve, and then works relentlessly to get you there. It doesn't just respond — it acts, iterates, and pushes forward while you live your life.
+
+## How It Works
+
+```
+You (Telegram/Lark) → CC-Claw Cloud → Your Device → Claude Code CLI
+                               ↑                              ↓
+                    Progress Reports ← ─────── Results / New Tasks
+```
+
+1. **Onboarding** — CC-Claw asks about your profession, situation, and goals
+2. **Goal Setting** — Together you define what "better" looks like for you
+3. **Continuous Work** — CC-Claw breaks goals into tasks, executes, generates next tasks
+4. **Smart Throttling** — Never wastes tokens on 429 errors; checks hourly for token refresh
+
+## Features
+
+- 🎯 **Goal-Driven** — Works toward *your* goals, not just answering questions
+- ⚡ **Autonomous Loop** — Task → Execute → Next Task → Repeat (until goal reached)
+- 🏖️ **Smart Rest** — Stops on 429, checks hourly for token refresh, resumes automatically
+- 🔝 **Priority Queue** — Your new instructions jump to the front of the queue
+- 🤫 **Silent Mode** — No periodic check-ins. Reports only when you ask, or when milestones are reached
+- 🔒 **Private** — All execution happens on your local machine
 
 ## Architecture
 
 ```
-Telegram/Lark User → Bot → Cloud Server → Local Gateway → Claude Code CLI
-                        ↑                              ↓
-                        └────────── Response ←─────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│                         Internet                                 │
+└─────────────────────────────┬───────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                     Cloud Server                                 │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────────┐ │
+│  │ Telegram    │  │   API       │  │  WebSocket Server       │ │
+│  │ Bot / Lark  │  │   Server   │  │  (persistent connection) │ │
+│  └─────────────┘  └─────────────┘  └─────────────────────────┘ │
+└─────────────────────────────────────────────────────────────────┘
+                              │ WSS
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                     Your Device (Local)                         │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────────┐ │
+│  │ Gateway     │  │ Goal Engine │  │  Claude Code CLI        │ │
+│  │ Client      │  │ Task Queue  │  │  (executes tasks)       │ │
+│  └─────────────┘  └─────────────┘  └─────────────────────────┘ │
+└─────────────────────────────────────────────────────────────────┘
 ```
-
-## Features
-
-- 🔗 **Simple Pairing** - Connect your device with a 6-digit code
-- 🔒 **Secure** - WebSocket with authentication and token-based access
-- 💬 **Multi-platform** - Support both Telegram and Lark (Feishu)
-- 🛠️ **Full Claude Code** - Execute any Claude Code command remotely
-- 🔄 **Session Continuity** - Uses `--continue` flag for conversation context
-- ⚡ **Permissions Bypass** - Skip permission prompts for automation
-- ⏰ **Scheduled Tasks** - Delay command execution with `/delay` command
-
-## Prerequisites
-
-### Server
-- Python 3.10+
-- Telegram Bot Token (get from @BotFather) - for Telegram support
-- Lark App ID & Secret (get from [Feishu Open Platform](https://open.feishu.cn/)) - for Lark support
-- (Optional) Domain with SSL for production
-
-### Client
-- Python 3.10+
-- [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code/initial-setup) installed
-- Internet connection to reach your server
 
 ## Quick Start
 
-### 1. Server Setup (Cloud/VPS)
-
-#### Option A: Run with Python (Development)
+### 1. Server Setup
 
 ```bash
-# Clone and setup
 git clone https://github.com/onlysyz/cc-claw.git
 cd cc-claw
-
-# Install dependencies
 pip install -e .
-
-# Copy and edit environment
 cp .env.example .env
-# Edit .env with your settings:
-# - TELEGRAM_BOT_TOKEN=your_bot_token
-# - SERVER_API_URL=https://your-domain.com/api
-# - SERVER_WS_URL=wss://your-domain.com/ws
-
-# Start server
+# Edit .env with your TELEGRAM_BOT_TOKEN
 python run_server.py
 ```
 
-#### Option B: Run with Docker (Recommended)
+### 2. Client Setup
 
 ```bash
-# Clone and setup
-git clone https://github.com/onlysyz/cc-claw.git
-cd cc-claw
-
-# Copy and edit environment
-cp .env.example .env
-# Edit .env with your Telegram Bot Token
-
-# Start with Docker Compose
-docker-compose up -d
-```
-
-### 2. Client Setup (Local Machine)
-
-#### One-Command Install (Recommended)
-
-```bash
-# Install client
 pip install -e .
-
-# Run one-command install (setup + pair + start)
 cc-claw install
 ```
 
-This will:
-1. Ask for your server URL
-2. Check Claude CLI
-3. Guide you through pairing
-4. Start the daemon
+### 3. First Run — Onboarding
 
-#### Manual Setup
+When you first message the bot, CC-Claw will ask:
 
-```bash
-# Install client
-pip install -e .
+- What is your profession?
+- What is your current situation?
+- What is your short-term goal?
+- What does "better" look like for you?
 
-# Interactive setup wizard
-cc-claw setup
-
-# Or manually configure
-cc-claw config --set server_api_url=https://your-server.com/api
-cc-claw config --set server_ws_url=wss://your-server.com/ws
-
-# Pair with Telegram bot
-cc-claw pair
-```
-
-During pairing:
-1. Open Telegram and send `/pair` to your bot
-2. Enter the 6-digit code shown in terminal
-3. After pairing, start the daemon:
-
-```bash
-# Start the daemon (runs in background)
-cc-claw start
-```
+These define your **User Profile** and **Goal**, which power the autonomous loop.
 
 ## Usage
 
-### After Setup
-
-1. Send messages to your Telegram bot
-2. Messages are forwarded to your local Claude Code CLI
-3. Responses are sent back to Telegram
-
-### Client Commands
+### Client CLI
 
 ```bash
-# Check status
-cc-claw status
-
-# View configuration
-cc-claw config
-
-# Update configuration
-cc-claw config --set timeout=600      # Set timeout (seconds)
-cc-claw config --set working_dir=~/projects  # Set working directory
-
-# Unpair device
-cc-claw unpair
+cc-claw start        # Start the daemon
+cc-claw status       # Check connection and goal progress
+cc-claw progress     # View completed tasks and token stats
+cc-claw pause        # Pause autonomous mode
+cc-claw resume       # Resume autonomous mode
+cc-claw goals        # List current goals
 ```
 
-### Configuration Options
-
-| Option | Default | Description |
-|--------|---------|-------------|
-| `server_api_url` | `https://cc-claw.example.com/api` | Server API URL |
-| `server_ws_url` | `wss://cc-claw.example.com/ws` | Server WebSocket URL |
-| `claude_path` | `claude` | Path to Claude CLI |
-| `timeout` | `300` | Command timeout (seconds) |
-| `working_dir` | `/tmp` | Working directory for Claude sessions |
-| `permission_mode` | `default` | Permission mode: `default`, `bypassPermissions` |
-
-#### Permission Modes
-
-- `default` - Ask for permissions when needed
-- `bypassPermissions` - Skip all permission prompts (recommended for automation)
-
-### Server Commands (Telegram/Lark)
+### Bot Commands
 
 | Command | Description |
 |---------|-------------|
-| `/start` | Welcome message |
-| `/pair` | Start pairing process |
-| `/unpair` | Unpair device |
-| `/status` | Check connection status |
-| `/tasks` | List scheduled tasks |
-| `/delay <min> <cmd>` | Schedule a command to run after N minutes |
-| `/help` | Help information |
+| `/start` | Welcome + onboarding |
+| `/progress` | View goal progress and task history |
+| `/pause` | Pause autonomous execution |
+| `/resume` | Resume autonomous execution |
+| `/tasks` | List current task queue |
+| `/goals` | Manage goals |
+| `/status` | Connection status |
+| `/help` | Help |
+
+> **Note**: CC-Claw does NOT send periodic check-ins. It works silently unless you ask.
+
+## Token Budget Management
+
+CC-Claw is designed for coding plans with periodic token refresh:
+
+| Situation | Behavior |
+|-----------|----------|
+| Normal | Continuous task execution |
+| 429 Rate Limit | Stop, wait with exponential backoff |
+| Hourly Check | Poll for token usage refresh |
+| Tokens Refreshed | Resume full speed |
+| Tokens < 10% remaining | Slow down (lower concurrency) |
 
 ## Development
 
@@ -181,39 +139,25 @@ cc-claw unpair
 
 ```
 cc-claw/
-├── client/              # Client package
-│   ├── api.py          # API client
+├── client/              # Local gateway & execution engine
+│   ├── api.py          # Server API client
 │   ├── claude.py       # Claude CLI executor
 │   ├── config.py       # Configuration
 │   ├── daemon.py       # Daemon process
 │   ├── handler.py      # Message handler
 │   ├── scheduler.py     # Task scheduler
-│   └── websocket.py     # WebSocket manager
-├── server/             # Server package
+│   ├── websocket.py    # WebSocket manager
+│   ├── profile.py       # User profile & goals
+│   ├── goal_engine.py  # Goal → Task decomposition
+│   ├── task_queue.py   # Priority task queue
+│   └── token_tracker.py # Token usage tracking
+├── server/             # Cloud server
 │   ├── api/           # REST API
 │   ├── bot/           # Telegram & Lark bots
 │   ├── services/      # Storage
 │   └── ws/            # WebSocket server
 ├── cli.py              # Client CLI
 └── run_server.py       # Server entry point
-```
-
-### Running Server Locally
-
-```bash
-# Start server on custom port
-python run_server.py --host 0.0.0.0 --port 3000
-```
-
-### Running Client Locally
-
-```bash
-# Start client
-python cli.py start
-
-# Or install and use the command
-pip install -e .
-cc-claw start
 ```
 
 ## Tech Stack
