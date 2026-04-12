@@ -57,6 +57,12 @@ class MessageHandler:
 
             logger.info(f"Received message: {content[:50]}..., priority={is_priority}")
 
+            # Check for profile action nested inside data (server sends as data.type == "profile")
+            if message.data.get("type") == "profile":
+                logger.info("Detected profile message nested in data")
+                await self.handle_profile_message(message.data)
+                return
+
             # Send acknowledgment first
             if message_id:
                 await self.ws.send_ack(message_id)
@@ -147,18 +153,22 @@ class MessageHandler:
         except Exception as e:
             logger.error(f"Error in handle_message: {e}", exc_info=True)
 
-    async def handle_profile_message(self, message: Message):
-        """Handle profile save/update messages from server"""
+    async def handle_profile_message(self, inner_data: dict):
+        """Handle profile save/update messages from server
+        inner_data is message.data from the WebSocket message, which contains:
+        {type: "profile", action: "save_profile", data: {...}, lark_open_id: ..., user_id: ...}
+        """
         try:
-            action = message.data.get("action", "")
-            profile_data = message.data.get("data", {})
-            lark_open_id = message.data.get("lark_open_id")
-            user_id = message.data.get("user_id")
+            action = inner_data.get("action", "")
+            profile_data = inner_data.get("data", {})
+            lark_open_id = inner_data.get("lark_open_id")
+            user_id = inner_data.get("user_id")
+            message_id = inner_data.get("message_id")
 
             logger.info(f"Profile message: action={action}, data={profile_data}")
 
             if action == "save_profile":
-                # Update profile fields in-place (don't replace object)
+                # Update profile fields in-place
                 self.profile.profile.profession = profile_data.get("profession", "")
                 self.profile.profile.situation = profile_data.get("situation", "")
                 self.profile.profile.short_term_goal = profile_data.get("short_term_goal", "")
@@ -182,11 +192,7 @@ class MessageHandler:
                     f"Goal set: {goal_text[:50]}...\n"
                     f"🎯 Autonomous mode starting..."
                 )
-                await self.ws.send_message(confirm, message.message_id, [], lark_open_id)
-
-                # Acknowledge
-                if message.message_id:
-                    await self.ws.send_ack(message.message_id)
+                await self.ws.send_message(confirm, message_id, [], lark_open_id)
 
         except Exception as e:
             logger.error(f"Error handling profile message: {e}", exc_info=True)
