@@ -196,7 +196,7 @@ class LarkBot:
         except Exception as e:
             logger.error(f"Error handling Lark message: {e}", exc_info=True)
 
-    def _handle_onboarding_message(self, open_id: str, text: str, user: dict):
+    async def _handle_onboarding_message(self, open_id: str, text: str, user: dict):
         """Handle onboarding messages"""
         from ..services.storage import storage
 
@@ -221,7 +221,7 @@ class LarkBot:
                 device = storage.get_user_device(user_id)
                 if device:
                     from ..ws import ws_server
-                    ws_server.send_profile_to_device(
+                    await ws_server.send_profile_to_device(
                         device["id"],
                         profile_data={
                             "profession": onboarding_data.get("profession", ""),

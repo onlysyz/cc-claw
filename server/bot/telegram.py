@@ -476,7 +476,8 @@ class CCClawBot:
                 device = storage.get_user_device(db_user["id"])
                 if device:
                     from ..ws import ws_server
-                    ws_server.send_profile_to_device(
+                    import asyncio
+                    asyncio.create_task(ws_server.send_profile_to_device(
                         device["id"],
                         profile_data={
                             "profession": onboarding_data.get("profession", ""),
@@ -485,7 +486,7 @@ class CCClawBot:
                             "what_better_means": onboarding_data.get("better", ""),
                         },
                         message_id=str(update.message.message_id),
-                    )
+                    ))
 
             update.message.reply_text(
                 "✅ Onboarding complete!\n\n"
