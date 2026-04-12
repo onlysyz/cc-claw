@@ -471,23 +471,21 @@ class CCClawBot:
             storage.set_onboarding_state(db_user["id"], "complete", onboarding_data)
             logger.info(f"Onboarding complete for user {db_user['id']}: {onboarding_data}")
 
-            # Forward profile to paired device if exists
+            # Forward profile to paired device directly via WebSocket (not via queue)
             if db_user.get("device_ids"):
                 device = storage.get_user_device(db_user["id"])
                 if device:
-                    profile_msg = {
-                        "type": "profile",
-                        "action": "save_profile",
-                        "data": {
+                    from ..ws import ws_server
+                    ws_server.send_profile_to_device(
+                        device["id"],
+                        profile_data={
                             "profession": onboarding_data.get("profession", ""),
                             "situation": onboarding_data.get("situation", ""),
                             "short_term_goal": onboarding_data.get("goal", ""),
                             "what_better_means": onboarding_data.get("better", ""),
                         },
-                        "chat_id": update.message.chat_id,
-                        "user_id": db_user["telegram_id"],
-                    }
-                    simple_storage.publish_message(device["id"], profile_msg)
+                        message_id=str(update.message.message_id),
+                    )
 
             update.message.reply_text(
                 "✅ Onboarding complete!\n\n"

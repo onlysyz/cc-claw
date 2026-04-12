@@ -96,7 +96,7 @@ class CCClawDaemon:
         self.ws_manager.on("message", self.handler.handle_message)
         self.ws_manager.on("error", self.handler.handle_error)
         self.ws_manager.on("delivered", self.handler.handle_delivered)
-        self.ws_manager.on("profile", self.handler.handle_profile_message)
+        self.ws_manager.on("profile_data", self.handler.handle_profile_data_message)
 
         # Connect and start listening
         if await self.ws_manager.connect():

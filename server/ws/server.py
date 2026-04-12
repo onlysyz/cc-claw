@@ -201,6 +201,42 @@ class WebSocketServer:
             if client:
                 self._remove_client(client)
 
+    async def send_profile_to_device(self, device_id: str, profile_data: dict, lark_open_id: str = None, message_id: str = None):
+        """Send profile data directly to device via WebSocket (bypasses message queue)
+
+        profile_data: {
+            "profession": ...,
+            "situation": ...,
+            "short_term_goal": ...,
+            "what_better_means": ...
+        }
+        """
+        if device_id not in self.clients:
+            logger.warning(f"No connection for device {device_id}")
+            return False
+
+        msg = {
+            "type": "profile_data",
+            "profession": profile_data.get("profession", ""),
+            "situation": profile_data.get("situation", ""),
+            "short_term_goal": profile_data.get("short_term_goal", ""),
+            "what_better_means": profile_data.get("what_better_means", ""),
+            "lark_open_id": lark_open_id,
+            "message_id": message_id,
+        }
+        msg_json = json.dumps(msg)
+        logger.info(f"Sending profile directly to device: {msg_json[:100]}...")
+
+        sent = False
+        for client in self.clients[device_id]:
+            try:
+                await client.websocket.send(msg_json)
+                sent = True
+                logger.info(f"Profile sent to device {device_id}")
+            except Exception as e:
+                logger.error(f"Error sending profile to device {device_id}: {e}")
+        return sent
+
     async def poll_messages(self, client: Client):
         """Poll for messages from Telegram and send to client"""
         logger.info(f"Started polling messages for device {client.device_id}")

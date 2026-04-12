@@ -44,7 +44,6 @@ class MessageHandler:
         self.ws.on("error", self.handle_error)
         self.ws.on("delivered", self.handle_delivered)
         self.ws.on("tasks", self.handle_tasks_request)
-        self.ws.on("profile", self.handle_profile_message)
 
     async def handle_message(self, message: Message):
         """Handle incoming message from user"""
@@ -56,12 +55,6 @@ class MessageHandler:
             is_priority = message.data.get("priority", False)
 
             logger.info(f"Received message: {content[:50]}..., priority={is_priority}")
-
-            # Check for profile action nested inside data (server sends as data.type == "profile")
-            if message.data.get("type") == "profile":
-                logger.info("Detected profile message nested in data")
-                await self.handle_profile_message(message.data)
-                return
 
             # Send acknowledgment first
             if message_id:
@@ -153,49 +146,43 @@ class MessageHandler:
         except Exception as e:
             logger.error(f"Error in handle_message: {e}", exc_info=True)
 
-    async def handle_profile_message(self, inner_data: dict):
-        """Handle profile save/update messages from server
-        inner_data is message.data from the WebSocket message, which contains:
-        {type: "profile", action: "save_profile", data: {...}, lark_open_id: ..., user_id: ...}
+    async def handle_profile_data_message(self, message: Message):
+        """Handle profile_data messages sent directly via WebSocket (not via queue)
+
+        Received as: {"type": "profile_data", "profession": ..., "situation": ..., ...}
+        No message_id that would cause echo-back to user.
         """
         try:
-            action = inner_data.get("action", "")
-            profile_data = inner_data.get("data", {})
-            lark_open_id = inner_data.get("lark_open_id")
-            user_id = inner_data.get("user_id")
-            message_id = inner_data.get("message_id")
+            profession = message.data.get("profession", "")
+            situation = message.data.get("situation", "")
+            short_term_goal = message.data.get("short_term_goal", "")
+            what_better_means = message.data.get("what_better_means", "")
+            lark_open_id = message.data.get("lark_open_id")
 
-            logger.info(f"Profile message: action={action}, data={profile_data}")
+            logger.info(f"Profile data received: profession={profession}, goal={short_term_goal[:30]}...")
 
-            if action == "save_profile":
-                # Update profile fields in-place
-                self.profile.profile.profession = profile_data.get("profession", "")
-                self.profile.profile.situation = profile_data.get("situation", "")
-                self.profile.profile.short_term_goal = profile_data.get("short_term_goal", "")
-                self.profile.profile.what_better_means = profile_data.get("what_better_means", "")
-                self.profile.profile.onboarding_completed = True
-                self.profile.profile.updated_at = datetime.now().isoformat()
-                self.profile._save()
+            # Update profile fields in-place
+            self.profile.profile.profession = profession
+            self.profile.profile.situation = situation
+            self.profile.profile.short_term_goal = short_term_goal
+            self.profile.profile.what_better_means = what_better_means
+            self.profile.profile.onboarding_completed = True
+            self.profile.profile.updated_at = datetime.now().isoformat()
+            self.profile._save()
 
-                logger.info(f"Profile saved and persisted for user {user_id}")
-                logger.info(f"  onboarding_completed={self.profile.profile.onboarding_completed}")
+            logger.info(f"Profile saved. onboarding_completed={self.profile.profile.onboarding_completed}")
 
-                # Create initial goal from profile
-                goal_text = profile_data.get("short_term_goal", "")
-                if goal_text:
-                    goal = self.profile.add_goal(goal_text)
-                    logger.info(f"Created initial goal: {goal.id} - {goal_text}")
+            # Create initial goal from short_term_goal
+            if short_term_goal:
+                goal = self.profile.add_goal(short_term_goal)
+                logger.info(f"Created initial goal: {goal.id} - {short_term_goal}")
 
-                # Confirm to user via Lark (or Telegram)
-                confirm = (
-                    f"✅ Profile received!\n\n"
-                    f"Goal set: {goal_text[:50]}...\n"
-                    f"🎯 Autonomous mode starting..."
-                )
-                await self.ws.send_message(confirm, message_id, [], lark_open_id)
+            # Note: we don't send a message back to server here because
+            # profile_data messages don't carry a Lark message_id (intentionally)
+            # The server already sent the "✅ 初始化完成" message directly to the user
 
         except Exception as e:
-            logger.error(f"Error handling profile message: {e}", exc_info=True)
+            logger.error(f"Error handling profile_data message: {e}", exc_info=True)
 
     async def _handle_delay_command(self, content: str, message_id: str, lark_open_id: str = None):
         """Handle /delay command"""
