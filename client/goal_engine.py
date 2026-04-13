@@ -1,57 +1,26 @@
-"""CC-Claw Goal Engine - Decomposes goals into executable tasks using MiniMax"""
+"""CC-Claw Goal Engine - Decomposes goals into executable tasks using Claude Code"""
 
-import asyncio
 import json
 import logging
 from typing import List, Optional
 
 from .claude import ClaudeExecutor
 from .profile import ProfileManager, Goal, Task, TaskStatus
-from .config import ClientConfig
 
 
 logger = logging.getLogger(__name__)
 
 
-SYSTEM_PROMPT = """You are a task decomposition assistant. Given a goal and user context, break it down into 5-10 concrete, actionable tasks that can be executed independently.
-
-Rules:
-- Each task should be a single, clear action (e.g., "Create a README.md file", "Write unit tests for auth module")
-- Tasks should be ordered: foundation first, then incremental
-- Tasks should be specific enough that completing them clearly advances the goal
-- Return ONLY a valid JSON array of task strings, nothing else
-
-Example output format:
-["Task 1 description", "Task 2 description", "Task 3 description"]
-
-No markdown, no explanation, just the JSON array."""
-
-
 class GoalEngine:
-    """Breaks down goals into executable tasks using MiniMax API"""
+    """Breaks down goals into executable tasks using Claude Code"""
 
-    def __init__(self, config: ClientConfig, profile: ProfileManager, claude: ClaudeExecutor):
+    def __init__(self, config, profile: ProfileManager, claude: ClaudeExecutor):
         self.config = config
         self.profile = profile
         self.claude = claude
-        # Lazy-load MiniMax client to avoid import errors when not configured
-        self._minimax = None
 
-    @property
-    def minimax(self):
-        """Lazy-load MiniMax client"""
-        if self._minimax is None:
-            from .minimax import MiniMaxClient
-            # Pass config values so MiniMaxClient can use them (reads from env vars)
-            self._minimax = MiniMaxClient(
-                api_key=self.config.minimax_api_key,
-                base_url=self.config.minimax_api_url,
-                model=self.config.minimax_model,
-            )
-        return self._minimax
-
-    def _build_decomposition_prompt(self, goal: Goal) -> str:
-        """Build the prompt for goal decomposition"""
+    def _build_decomposition_prompt_with_system(self, goal: Goal) -> str:
+        """Build the prompt for goal decomposition including system instructions"""
         p = self.profile.profile
         context = ""
         if p and p.onboarding_completed:
@@ -63,7 +32,17 @@ class GoalEngine:
 
 """
 
-        return f"""{context}Goal to decompose: {goal.description}
+        return f"""{context}You are a task decomposition assistant. Given a goal, break it down into 5-10 concrete, actionable tasks.
+
+Output format (MUST be valid JSON):
+{{"tasks": ["task 1 description", "task 2 description", ...]}}
+
+Rules:
+- Each task should be a single, clear action
+- Tasks should be ordered: foundation first, then incremental
+- Return ONLY the JSON object, no markdown, no explanation
+
+Goal to decompose: {goal.description}
 
 Break this goal down into 5-10 concrete tasks. Consider:
 1. What needs to be done first (foundation, setup, research)
@@ -71,10 +50,10 @@ Break this goal down into 5-10 concrete tasks. Consider:
 3. What can be done in parallel vs sequentially
 4. What constitutes "done" for this goal
 
-Return ONLY a JSON array of task strings."""
+Output the tasks as a JSON object with a "tasks" array."""
 
     async def decompose_goal(self, goal_id: str) -> List[Task]:
-        """Decompose a goal into tasks using MiniMax API
+        """Decompose a goal into tasks using Claude Code
         Returns list of created Task objects
         """
         # Find the goal
@@ -90,16 +69,13 @@ Return ONLY a JSON array of task strings."""
 
         logger.info(f"Decomposing goal: {goal.description}")
 
-        prompt = self._build_decomposition_prompt(goal)
-
-        # Call MiniMax API to get task decomposition (saves Claude Code tokens)
-        response, _ = await self.minimax.chat(prompt, SYSTEM_PROMPT)
+        prompt = self._build_decomposition_prompt_with_system(goal)
 
         # Parse the JSON response
         task_descriptions = self._parse_tasks(response)
 
         if not task_descriptions:
-            logger.warning(f"No tasks parsed from Claude response: {response[:200]}")
+            logger.warning(f"No tasks parsed from response: {response[:200] if response else 'empty'}")
             return []
 
         # Create Task objects
@@ -117,34 +93,34 @@ Return ONLY a JSON array of task strings."""
         return created_tasks
 
     def _parse_tasks(self, response: str) -> List[str]:
-        """Parse task list from Claude's response"""
-        # Try to find JSON array in response
+        """Parse task list from Claude's JSON response"""
+        if not response:
+            return []
+
         try:
-            # Find array start
-            json_start = response.find('[')
-            if json_start == -1:
-                return []
-
-            # Find array end (matching bracket)
-            depth = 0
-            json_end = json_start
-            for i, c in enumerate(response[json_start:], json_start):
-                if c == '[':
-                    depth += 1
-                elif c == ']':
-                    depth -= 1
-                    if depth == 0:
-                        json_end = i + 1
-                        break
-
-            json_str = response[json_start:json_end]
-            tasks = json.loads(json_str)
-
-            if isinstance(tasks, list) and all(isinstance(t, str) for t in tasks):
-                return [t.strip() for t in tasks if t.strip()]
-
-        except (json.JSONDecodeError, ValueError) as e:
+            # Try to find JSON object with tasks array
+            data = json.loads(response)
+            if isinstance(data, dict) and "tasks" in data:
+                tasks = data["tasks"]
+                if isinstance(tasks, list) and all(isinstance(t, str) for t in tasks):
+                    return [t.strip() for t in tasks if t.strip()]
+            elif isinstance(data, list):
+                # Direct array format
+                if all(isinstance(t, str) for t in data):
+                    return [t.strip() for t in data if t.strip()]
+        except json.JSONDecodeError as e:
             logger.warning(f"Failed to parse tasks JSON: {e}")
+
+        # Fallback: try to find array in text
+        try:
+            json_start = response.find('[')
+            if json_start != -1:
+                json_str = response[json_start:]
+                tasks = json.loads(json_str)
+                if isinstance(tasks, list) and all(isinstance(t, str) for t in tasks):
+                    return [t.strip() for t in tasks if t.strip()]
+        except (json.JSONDecodeError, ValueError):
+            pass
 
         return []
 
