@@ -180,10 +180,10 @@ ngrok http 4001
 
 ```bash
 # 新终端窗口
-cc-claw pair --server ws://localhost:4001
+python3 -m cli pair --server ws://localhost:4001
 
 # 或连接远程服务器
-cc-claw pair --server wss://your-server.com:4001
+python3 -m cli pair --server wss://your-server.com:4001
 ```
 
 #### 8. 在飞书中使用
@@ -211,10 +211,10 @@ cc-claw pair --server wss://your-server.com:4001
 tail -f logs/server.log
 
 # 查看客户端日志
-cc-claw status
+python3 -m cli status
 
 # 重启服务
-pkill -f run_server.py && python run_server.py &
+pkill -f run_server.py && python3 -m server.run &
 ```
 
 ---
@@ -238,13 +238,13 @@ CC-Claw 会自动：
 ### 基本命令
 
 ```bash
-cc-claw start        # 启动守护进程
-cc-claw status       # 查看连接状态
-cc-claw progress     # 查看目标进度
-cc-claw pause        # 暂停自主模式
-cc-claw resume       # 恢复自主模式
-cc-claw goals        # 查看所有目标
-cc-claw tasks        # 查看任务队列
+python3 -m cli start        # 启动守护进程
+python3 -m cli status       # 查看连接状态
+python3 -m cli progress     # 查看目标进度
+python3 -m cli pause        # 暂停自主模式
+python3 -m cli resume       # 恢复自主模式
+python3 -m cli goals        # 查看所有目标
+python3 -m cli tasks        # 查看任务队列
 ```
 
 ### 机器人命令

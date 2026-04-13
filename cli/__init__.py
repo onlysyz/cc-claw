@@ -12,7 +12,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from cc_claw.client import ClientConfig, PairingInfo, CCClawDaemon, APIClient
+from client import ClientConfig, PairingInfo, CCClawDaemon, APIClient
 
 # Load .env file if it exists
 load_dotenv(Path(__file__).parent.parent / ".env")
@@ -55,7 +55,7 @@ def cmd_status(args):
     print(f"Claude Path: {config.claude_path}")
 
     # Check Claude CLI
-    from cc_claw.client import ClaudeExecutor
+    from client import ClaudeExecutor
     claude = ClaudeExecutor(config)
     if claude.is_available():
         print(f"Claude: Available ({claude.get_version()})")
@@ -263,7 +263,7 @@ def cmd_setup(args):
     print("\n✓ Configuration saved!")
 
     # Check Claude availability
-    from cc_claw.client import ClaudeExecutor
+    from client import ClaudeExecutor
     claude = ClaudeExecutor(config)
     if claude.is_available():
         print(f"✓ Claude CLI found: {claude.get_version()}")
@@ -313,7 +313,7 @@ def cmd_install(args):
     config.working_dir = "/tmp/cc-claw-sessions"
 
     # Check Claude
-    from cc_claw.client import ClaudeExecutor
+    from client import ClaudeExecutor
     claude = ClaudeExecutor(config)
     if not claude.is_available():
         print("\n✗ Claude CLI not found!")
@@ -346,7 +346,7 @@ def cmd_install(args):
     print("\nCompleting pairing...")
 
     async def complete():
-        from cc_claw.client import APIClient
+        from client import APIClient
         api = APIClient(config)
         result = await api.complete_pairing(
             code=pairing_code,
