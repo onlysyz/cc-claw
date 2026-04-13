@@ -12,7 +12,6 @@ from .scheduler import TaskScheduler, ScheduledTask
 from .memory import PersistentMemory, ConversationMemory
 from .collaboration import MultiAgentCollaboration, AgentRole, TaskStatus, CollaborationTask
 from .retry import SmartRetry, RetryConfig, RetryStrategy, CircuitBreaker, get_retry_manager, RETRY_CONFIGS
-from .agentsolvehub import AgentSolveHubPlugin, get_agentsolvehub
 
 __all__ = [
     "ClientConfig",
@@ -38,7 +37,4 @@ __all__ = [
     "CircuitBreaker",
     "get_retry_manager",
     "RETRY_CONFIGS",
-    # AgentSolveHub integration
-    "AgentSolveHubPlugin",
-    "get_agentsolvehub",
 ]
