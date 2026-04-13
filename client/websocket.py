@@ -178,9 +178,10 @@ class WebSocketManager:
     @property
     def is_connected(self) -> bool:
         """Check if WebSocket is connected and can send messages"""
-        if not self.ws:
+        if not self._running or not self.ws:
             return False
-        is_open = getattr(self.ws, 'is_open', None)
-        if is_open is not None:
-            return is_open
-        return getattr(self.ws, 'open', False)
+        try:
+            from websockets.connection import State
+            return self.ws.state is State.OPEN
+        except (ImportError, AttributeError):
+            return getattr(self.ws, 'open', False)

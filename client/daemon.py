@@ -432,15 +432,24 @@ class CCClawDaemon:
         finally:
             self.queue_manager.queue.mark_done()
 
-        # Always send notification when task ends (success or failure)
-        if self.ws_manager and self.ws_manager.is_connected and notify_msg:
-            success = await self.ws_manager.send_notification(notify_msg)
-            if success:
-                logger.info(f"Notification sent: {notify_msg[:50]}...")
+        # Always send notification when task ends (success or failure).
+        # Long-running tasks may have caused a WS drop; wait up to 30s for reconnect.
+        if self.ws_manager and notify_msg:
+            if not self.ws_manager.is_connected:
+                logger.info("WebSocket not connected after task, waiting up to 30s for reconnection...")
+                for _ in range(6):
+                    await asyncio.sleep(5)
+                    if self.ws_manager.is_connected:
+                        break
+
+            if self.ws_manager.is_connected:
+                success = await self.ws_manager.send_notification(notify_msg)
+                if success:
+                    logger.info(f"Notification sent: {notify_msg[:50]}...")
+                else:
+                    logger.warning("Failed to send notification despite being connected")
             else:
-                logger.warning(f"Failed to send notification")
-        elif notify_msg:
-            logger.warning(f"Notification not sent: ws_manager={self.ws_manager is not None}, connected={getattr(self.ws_manager, 'is_connected', False)}")
+                logger.warning("Notification not sent: WebSocket still disconnected after waiting")
 
     async def _suggest_new_goal(self) -> Optional[str]:
         """Ask Claude to suggest a new goal based on user's context and current situation"""

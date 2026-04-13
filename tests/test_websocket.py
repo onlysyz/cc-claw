@@ -240,10 +240,12 @@ class TestWebSocketManagerIsConnected:
 
         assert ws.is_connected is False
 
-    def test_is_connected_uses_is_open_attribute(self):
+    def test_is_connected_true_when_state_is_open(self):
+        from websockets.connection import State
+
         config = MagicMock()
         mock_ws = MagicMock()
-        mock_ws.is_open = True
+        mock_ws.state = State.OPEN
 
         ws = WebSocketManager(config)
         ws._running = True
@@ -251,16 +253,29 @@ class TestWebSocketManagerIsConnected:
 
         assert ws.is_connected is True
 
-    def test_is_connected_uses_open_attribute(self):
+    def test_is_connected_false_when_state_is_closed(self):
+        from websockets.connection import State
+
         config = MagicMock()
         mock_ws = MagicMock()
-        mock_ws.is_open = None
-        mock_ws.open = False  # Changed to False to avoid True being cached
+        mock_ws.state = State.CLOSED
 
         ws = WebSocketManager(config)
         ws._running = True
         ws.ws = mock_ws
 
-        # open is checked only if is_open is None/False
-        # Note: is_connected returns None (falsy) when is_open=None, which is != False (not same object)
-        assert not ws.is_connected
+        assert ws.is_connected is False
+
+    def test_is_connected_false_when_not_running_despite_open_state(self):
+        """_running=False short-circuits even if ws state is OPEN."""
+        from websockets.connection import State
+
+        config = MagicMock()
+        mock_ws = MagicMock()
+        mock_ws.state = State.OPEN
+
+        ws = WebSocketManager(config)
+        ws._running = False
+        ws.ws = mock_ws
+
+        assert ws.is_connected is False
