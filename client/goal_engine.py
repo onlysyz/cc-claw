@@ -71,6 +71,9 @@ Output the tasks as a JSON object with a "tasks" array."""
 
         prompt = self._build_decomposition_prompt_with_system(goal)
 
+        # Call Claude Code to decompose goal
+        response, _, _ = await self.claude.execute(prompt)
+
         # Parse the JSON response
         task_descriptions = self._parse_tasks(response)
 
