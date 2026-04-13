@@ -411,6 +411,10 @@ class MessageHandler:
 
     async def _handle_setgoal_command(self, goal_id: str, message_id: str, lark_open_id: str = None):
         """Handle /setgoal <id> command - switch active goal"""
+        if not goal_id:
+            response = "❌ 用法: /setgoal <goal_id>\n先用 /goals 查看所有目标及其ID"
+            await self.ws.send_message(response, message_id, [], lark_open_id)
+            return
         success = self.profile.set_active_goal(goal_id)
         if success:
             goal = None
@@ -426,6 +430,10 @@ class MessageHandler:
 
     async def _handle_newgoal_command(self, description: str, message_id: str, lark_open_id: str = None):
         """Handle /newgoal <description> - create a new goal and decompose it"""
+        if not description:
+            response = "❌ 用法: /newgoal <目标描述>\n例如: /newgoal 完成用户登录功能"
+            await self.ws.send_message(response, message_id, [], lark_open_id)
+            return
         goal = self.profile.add_goal(description)
         response = f"🎯 目标已创建:\n[{goal.id[:8]}] {description}\n\n正在分解任务..."
         await self.ws.send_message(response, message_id, [], lark_open_id)
