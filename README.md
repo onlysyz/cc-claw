@@ -56,7 +56,6 @@
 | ⚡ **自主执行** | 24/7 自动运行，无需人工干预 | autonomous agent, 24/7 coding |
 | 🧠 **持久化记忆** | 跨会话记忆上下文和决策 | persistent context, memory |
 | 🔄 **智能重试** | 指数退避 + 熔断器容错 | exponential backoff, circuit breaker |
-| 👥 **多 Agent 协作** | 多个 Agent 同时工作 | multi-agent, collaboration |
 | 📊 **Token 管理** | 自动规避限流，智能节流 | token management, rate limit |
 | 🔒 **本地执行** | 所有代码执行在本地完成 | local execution, privacy |
 | 🕒 **定时任务** | 支持延迟任务调度 | scheduled tasks, cron |
@@ -301,31 +300,6 @@ conv.add_user("继续上次的工作")
 conv.add_assistant("好的，上次你在实现支付模块...")
 ```
 
-### 多 Agent 协作
-
-```python
-from cc_claw import MultiAgentCollaboration, AgentRole
-
-collab = MultiAgentCollaboration()
-
-# 注册专家 Agent
-reviewer = collab.register_agent(
-    name="CodeReviewer",
-    role=AgentRole.REVIEWER,
-    capabilities=["python", "security"]
-)
-
-# 创建协作任务
-task = collab.create_task(
-    description="实现 JWT 认证",
-    goal_id="goal-123",
-    priority=10
-)
-
-# 分配任务
-collab.assign_task(task.id, reviewer.id)
-```
-
 ---
 
 ## 架构设计
@@ -366,7 +340,6 @@ collab.assign_task(task.id, reviewer.id)
 | **Goal Engine** | `client/goal_engine.py` | 将目标分解为可执行任务 |
 | **Task Queue** | `client/task_queue.py` | 优先级任务队列 |
 | **Persistent Memory** | `client/memory.py` | 跨会话上下文持久化 |
-| **Multi-Agent** | `client/collaboration.py` | 多 Agent 协作管理 |
 | **Smart Retry** | `client/retry.py` | 指数退避 + 熔断器 |
 | **Token Tracker** | `client/token_tracker.py` | Token 使用量追踪 |
 
@@ -382,7 +355,6 @@ collab.assign_task(task.id, reviewer.id)
 | 运行时间 | 仅在你编码时 | 24/7 持续工作 |
 | 任务执行 | 单行代码补全 | 完整任务自主执行 |
 | 记忆能力 | 无 | 持久化上下文 |
-| 多 Agent | 不支持 | 支持 |
 
 ### Q: Token 用完会怎样？
 
@@ -410,56 +382,6 @@ cd cc-claw
 pip install -e ".[dev]"
 pytest tests/
 ```
-
----
-
-## 性能基准
-
-| 指标 | 数值 |
-|------|------|
-| 目标分解准确率 | 94% |
-| 任务完成率 | 84% |
-| 自主执行时间 | 24/7 |
-| Token 利用率 | 98% |
-| 错误恢复率 | 99% |
-
----
-
-## 更新日志
-
-### v0.1.0 (最新)
-
-- ✅ 持久化记忆模块
-- ✅ 多 Agent 协作
-- ✅ 智能重试 + 熔断器
-- ✅ 12 个内置工具
-- ✅ 目标引擎优化
-
-[查看全部更新](CHANGELOG.md)
-
----
-
-## 相关资源
-
-| 资源 | 链接 |
-|------|------|
-| 📖 **文档** | [docs.cc-claw.dev](https://docs.cc-claw.dev) |
-| 💬 **Discord** | [discord.gg/cc-claw](https://discord.gg/cc-claw) |
-| 🐦 **Twitter** | [@ccclaw](https://twitter.com/ccclaw) |
-| 📝 **博客** | [blog.cc-claw.dev](https://blog.cc-claw.dev) |
-| 🐛 **Issue** | [GitHub Issues](https://github.com/onlysyz/cc-claw/issues) |
-
----
-
-## 相关文章
-
-| 文章 | 平台 | 链接 |
-|------|------|------|
-| 让 Claude Code 拥有"记忆" | 掘金 | [阅读](docs/articles/01-persistent-memory.md) |
-| 多 Agent 协作开发实战 | 知乎 | [阅读](docs/articles/02-multi-agent.md) |
-| 智能重试与熔断机制 | 掘金 | [阅读](docs/articles/03-retry-circuit-breaker.md) |
-| Building an Autonomous Coding Agent | Hacker News | [阅读](docs/articles/04-autonomous-loop.md) |
-| 12个内置工具生态 | 知乎 | [阅读](docs/articles/05-tools-ecosystem.md) |
 
 ---
 
