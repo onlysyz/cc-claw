@@ -233,14 +233,13 @@ class SmartRetry:
                     result = await func(*args, **kwargs)
 
                 # Success
-                if attempt > 0:
-                    logger.info(f"Operation '{operation}' succeeded on attempt {attempt + 1}")
-                    stats.successes += 1
-                    stats.retry_history.append({
-                        "attempt": attempt + 1,
-                        "success": True,
-                        "delay": stats.total_delay,
-                    })
+                logger.info(f"Operation '{operation}' succeeded on attempt {attempt + 1}")
+                stats.successes += 1
+                stats.retry_history.append({
+                    "attempt": attempt + 1,
+                    "success": True,
+                    "delay": stats.total_delay,
+                })
 
                 if cb:
                     cb.record_success()
@@ -250,6 +249,9 @@ class SmartRetry:
             except asyncio.TimeoutError as e:
                 last_error = f"Timeout after {config.timeout}s"
                 logger.warning(f"Operation '{operation}' timed out (attempt {attempt + 1})")
+                stats.failures += 1
+                stats.last_error = last_error
+                raise asyncio.TimeoutError(last_error)
 
             except CircuitBreakerOpen:
                 raise

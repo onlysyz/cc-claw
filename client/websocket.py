@@ -180,4 +180,7 @@ class WebSocketManager:
         """Check if connected"""
         if not self._running or not self.ws:
             return False
-        return getattr(self.ws, 'is_open', getattr(self.ws, 'open', False))
+        is_open = getattr(self.ws, 'is_open', None)
+        if is_open is not None:
+            return is_open
+        return getattr(self.ws, 'open', False)
