@@ -1,4 +1,4 @@
-"""CC-Claw Goal Engine - Decomposes goals into executable tasks using Claude"""
+"""CC-Claw Goal Engine - Decomposes goals into executable tasks using MiniMax"""
 
 import asyncio
 import json
@@ -28,12 +28,27 @@ No markdown, no explanation, just the JSON array."""
 
 
 class GoalEngine:
-    """Breaks down goals into executable tasks using Claude"""
+    """Breaks down goals into executable tasks using MiniMax API"""
 
     def __init__(self, config: ClientConfig, profile: ProfileManager, claude: ClaudeExecutor):
         self.config = config
         self.profile = profile
         self.claude = claude
+        # Lazy-load MiniMax client to avoid import errors when not configured
+        self._minimax = None
+
+    @property
+    def minimax(self):
+        """Lazy-load MiniMax client"""
+        if self._minimax is None:
+            from .minimax import MiniMaxClient
+            # Pass config values so MiniMaxClient can use them (reads from env vars)
+            self._minimax = MiniMaxClient(
+                api_key=self.config.minimax_api_key,
+                base_url=self.config.minimax_api_url,
+                model=self.config.minimax_model,
+            )
+        return self._minimax
 
     def _build_decomposition_prompt(self, goal: Goal) -> str:
         """Build the prompt for goal decomposition"""
@@ -59,7 +74,7 @@ Break this goal down into 5-10 concrete tasks. Consider:
 Return ONLY a JSON array of task strings."""
 
     async def decompose_goal(self, goal_id: str) -> List[Task]:
-        """Decompose a goal into tasks using Claude
+        """Decompose a goal into tasks using MiniMax API
         Returns list of created Task objects
         """
         # Find the goal
@@ -77,8 +92,8 @@ Return ONLY a JSON array of task strings."""
 
         prompt = self._build_decomposition_prompt(goal)
 
-        # Call Claude to get task decomposition
-        response, _ = await self.claude.execute(prompt)
+        # Call MiniMax API to get task decomposition (saves Claude Code tokens)
+        response, _ = await self.minimax.chat(prompt, SYSTEM_PROMPT)
 
         # Parse the JSON response
         task_descriptions = self._parse_tasks(response)
@@ -175,5 +190,5 @@ If pending tasks exist, pick the most logical next one.
 If all tasks are done, suggest a new task that would further the goal.
 Return ONLY the task description as a plain string, no markdown or explanation."""
 
-        response, _ = await self.claude.execute(prompt)
+        response, _, _ = await self.claude.execute(prompt)
         return response.strip() if response.strip() else None

@@ -14,6 +14,8 @@ from .scheduler import TaskScheduler
 from .profile import ProfileManager
 from .goal_engine import GoalEngine
 from .task_queue import QueueManager
+from .retry import get_retry_manager, RetryConfig, RetryStrategy, MaxRetriesExceeded
+from .memory import PersistentMemory
 
 
 logging.basicConfig(
@@ -39,6 +41,9 @@ class CCClawDaemon:
         self._task_checker_task: Optional[asyncio.Task] = None
         self._token_checker_task: Optional[asyncio.Task] = None
         self._autonomous_runner_task: Optional[asyncio.Task] = None
+        # New features
+        self.memory: Optional[PersistentMemory] = None
+        self.retry_manager = get_retry_manager()
 
     async def start(self):
         """Start the daemon"""
@@ -58,6 +63,10 @@ class CCClawDaemon:
             logger.info(f"Profile loaded: {self.profile.profile.profession}")
         else:
             logger.info("Profile not onboarded yet — will start when configured")
+
+        # Initialize persistent memory for context retention
+        self.memory = PersistentMemory()
+        logger.info("Persistent memory initialized")
 
         # Check Claude CLI availability
         self.claude = ClaudeExecutor(self.config)
@@ -91,6 +100,7 @@ class CCClawDaemon:
             self.profile,
             self.queue_manager,
             self.goal_engine,
+            self.memory,
             on_autonomous_start=lambda: self._start_autonomous_runner_if_needed(),
         )
 
@@ -115,8 +125,16 @@ class CCClawDaemon:
                 # Start token budget checker in background
                 self._token_checker_task = asyncio.create_task(self._token_checker())
 
-                # Autonomous runner will be started by profile handler callback after onboarding
-                logger.info("Autonomous runner will start after onboarding completes")
+                # If profile is already onboarded (daemon restart), restore queue from pending tasks
+                if self.profile.is_onboarding_complete():
+                    pending = self.profile.get_pending_tasks()
+                    for task in pending:
+                        self.queue_manager.queue.enqueue(task, user_initiated=False)
+                    logger.info(f"Restored {len(pending)} pending tasks to queue")
+                    # Start autonomous runner
+                    self._start_autonomous_runner_if_needed()
+                else:
+                    logger.info("Autonomous runner will start after onboarding completes")
 
                 # Keep running
                 while self._running:
@@ -131,8 +149,9 @@ class CCClawDaemon:
     async def _token_checker(self):
         """Background task to check token usage and handle rate limits
         - Every 1 hour, check if tokens have been refreshed
-        - When rate limited, apply exponential backoff
+        - When rate limited for >1 hour, auto-clear and let runner retry
         """
+        import time
         logger.info("Token budget checker started")
         while self._running:
             try:
@@ -143,9 +162,15 @@ class CCClawDaemon:
 
                 tb = self.profile.token_budget
 
-                # If rate limited, check if backoff period has passed
+                # If rate limited, check if we've been rate limited for >1 hour
                 if tb.is_rate_limited:
-                    logger.info(f"Still rate limited (backoff level {tb.backoff_level})")
+                    if tb.rate_limit_since:
+                        elapsed = time.time() - tb.rate_limit_since
+                        if elapsed >= 3600:
+                            logger.info(f"Rate limited for {elapsed/3600:.1f}h — auto-clearing to retry")
+                            self.profile.clear_rate_limit()
+                        else:
+                            logger.info(f"Still rate limited ({elapsed/60:.0f}min elapsed, backoff level {tb.backoff_level})")
                     continue
 
                 # Check if daily usage was reset (new day = token refresh for some plans)
@@ -153,8 +178,6 @@ class CCClawDaemon:
                 tb.check_daily_reset()
                 if tb.last_reset_date != old_reset_date:
                     logger.info(f"New day detected ({tb.last_reset_date}) — token budget may have refreshed")
-                    # Clear rate limit state if we were limited
-                    self.profile.clear_rate_limit()
 
                 logger.info(f"Token check: total_used={tb.total_used}, daily_used={tb.daily_used}")
 
@@ -192,7 +215,7 @@ class CCClawDaemon:
                 # Check token budget — if rate limited, apply backoff
                 tb = self.profile.token_budget
                 if tb.is_rate_limited:
-                    wait_seconds = 60 * (2 ** (tb.backoff_level - 1)) if tb.backoff_level > 0 else 60
+                    wait_seconds = min(60 * (2 ** (tb.backoff_level - 1)) if tb.backoff_level > 0 else 60, 3600)
                     logger.info(f"Rate limited, backing off for {wait_seconds}s")
                     await asyncio.sleep(wait_seconds)
                     continue
@@ -247,9 +270,28 @@ class CCClawDaemon:
                 goal = g
                 break
 
+        # Track outcome for notification
+        notify_status = "failed"
+        notify_msg = ""
+        goal_complete = False
+
         try:
-            # Execute with Claude
-            response, images = await self.claude.execute(task.description)
+            # Execute with Claude (with retry on transient errors)
+            retry_config = RetryConfig(
+                max_retries=3,
+                base_delay=2.0,
+                max_delay=60.0,
+                strategy=RetryStrategy.EXPONENTIAL_WITH_JITTER,
+                retry_on=(ConnectionError, TimeoutError),
+            )
+
+            response, images, raw_data = await self.retry_manager.execute(
+                f"claude_task_{task.id[:8]}",
+                self.claude.execute,
+                task.description,
+                config=retry_config,
+                circuit_breaker_name="claude_api"
+            )
 
             # Check for rate limit
             is_rate_limited = (
@@ -259,28 +301,27 @@ class CCClawDaemon:
             )
 
             if is_rate_limited:
-                # Requeue at front, wait, will be retried
-                from .profile import Task
-                task_obj = Task(
-                    id=task.id,
-                    description=task.description,
-                    goal_id=task.goal_id,
-                    status=TaskStatus.PENDING,
-                )
+                # Requeue at front for retry later, apply backoff
+                task.status = TaskStatus.PENDING
                 self.queue_manager.requeue_front(qt)
                 wait = self.profile.increment_backoff()
-                logger.warning(f"Rate limited, requeued task, backing off {wait}s")
-                await asyncio.sleep(wait)
+                logger.warning(f"Rate limited, requeued task {task.id[:8]}, backing off {wait}s")
+
+                if self.memory:
+                    self.memory.add_error_recovery("Rate limit (429)", f"Backoff {wait}s, will retry")
+
                 self.queue_manager.queue.mark_done()
+                await asyncio.sleep(wait)
                 return
 
-            # Parse token usage
+            # Parse token usage from raw JSON data
             from .token_tracker import TokenTracker
             tracker = TokenTracker()
-            _, usage, _ = tracker.parse_json_response(response)
-            if usage:
-                self.profile.record_usage(usage.total_tokens)
-                logger.info(f"Token usage: {usage.total_tokens}")
+            if raw_data and 'usage' in raw_data:
+                usage = tracker._build_usage(raw_data['usage'])
+                if usage:
+                    self.profile.record_usage(usage.total_tokens)
+                    logger.info(f"Token usage: {usage.total_tokens}")
 
             # Summarize result
             result_summary = response[:200].replace('\n', ' ')
@@ -289,6 +330,9 @@ class CCClawDaemon:
             self.profile.complete_task(task.id, result_summary=result_summary)
             logger.info(f"Task completed: {task.id[:8]} — {result_summary[:50]}...")
 
+            if self.memory:
+                self.memory.add_context_snapshot(task.description, "", result_summary)
+
             # Check if goal is complete
             if goal:
                 remaining = [t for t in self.profile.get_tasks_for_goal(goal.id)
@@ -296,19 +340,40 @@ class CCClawDaemon:
                 if not remaining:
                     logger.info(f"Goal '{goal.description}' — all tasks done!")
                     self.profile.complete_goal(goal.id)
+                    goal_complete = True
                     if self.ws_manager and self.ws_manager.is_connected:
-                        msg = {
+                        await self.ws_manager.send({
                             "type": "goal_complete",
                             "goal_id": goal.id,
                             "goal_description": goal.description,
-                        }
-                        await self.ws_manager.send(msg)
+                        })
+
+            notify_status = "completed"
+            task_num = len([t for t in self.profile.get_tasks_for_goal(goal.id)
+                           if t.status.value == "completed"])
+            total = len(self.profile.get_tasks_for_goal(goal.id))
+            notify_msg = f"✅ Task done [{task_num}/{total}]\n📋 {task.description}\n📤 {result_summary}"
+
+        except MaxRetriesExceeded as e:
+            logger.error(f"Task {task.id[:8]} failed after all retries: {e}")
+            self.profile.fail_task(task.id, str(e))
+            if self.memory:
+                self.memory.add_error_recovery("Task execution failed after retries", str(e))
+            notify_msg = f"❌ Task failed (max retries)\n📋 {task.description}\n💥 {e}"
 
         except Exception as e:
-            logger.error(f"Error executing autonomous task {task.id[:8]}: {e}")
+            logger.error(f"Error executing autonomous task {task.id[:8]}: {e}", exc_info=True)
             self.profile.fail_task(task.id, str(e))
+            if self.memory:
+                self.memory.add_error_recovery("Task execution failed", str(e))
+            notify_msg = f"❌ Task failed\n📋 {task.description}\n💥 {e}"
+
         finally:
             self.queue_manager.queue.mark_done()
+
+        # Always send notification when task ends (success or failure)
+        if self.ws_manager and self.ws_manager.is_connected and notify_msg:
+            await self.ws_manager.send_notification(notify_msg)
 
     async def _task_checker(self):
         """Background task to check and execute due tasks"""
@@ -334,7 +399,15 @@ class CCClawDaemon:
             logger.info(f"Executing scheduled task: {task.command}")
 
             # Execute the command
-            response, images = await self.claude.execute(task.command)
+            response, images, raw_data = await self.claude.execute(task.command)
+
+            # Track token usage
+            if raw_data and 'usage' in raw_data:
+                tracker = TokenTracker()
+                usage = tracker._build_usage(raw_data['usage'])
+                if usage:
+                    self.profile.record_usage(usage.total_tokens)
+                    logger.info(f"Token usage: {usage.total_tokens}")
 
             # Format the response
             result_msg = f"🔔 定时任务完成 [{task.id[:8]}]\n\n📋 命令:\n{task.command}\n\n📤 结果:\n{response}"

@@ -142,7 +142,10 @@ class QueueManager:
 
     def requeue_front(self, queued_task: QueuedTask):
         """Put a task back at the front of the queue (e.g., after rate limit)"""
+        # Clear currently executing since we're requeuing
+        self.queue.mark_done()
         self.queue._queue.appendleft(queued_task)
+        logger.debug(f"Requeued task to front: {queued_task.task.description[:50]}...")
 
     def format_status(self) -> str:
         """Format full queue status"""

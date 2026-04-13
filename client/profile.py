@@ -116,6 +116,7 @@ class TokenBudget:
     last_reset_date: str = ""  # date string YYYY-MM-DD
     is_rate_limited: bool = False
     rate_limit_until: Optional[str] = None  # ISO timestamp
+    rate_limit_since: Optional[float] = None  # Unix timestamp when rate limit started
     backoff_level: int = 0  # exponential backoff: 1min, 2min, 4min, 8min...
 
     def __post_init__(self):
@@ -365,18 +366,21 @@ class ProfileManager:
     def set_rate_limited(self, until: datetime):
         self.token_budget.is_rate_limited = True
         self.token_budget.rate_limit_until = until.isoformat()
+        if self.token_budget.rate_limit_since is None:
+            self.token_budget.rate_limit_since = datetime.now().timestamp()
         self._save()
 
     def clear_rate_limit(self):
         self.token_budget.is_rate_limited = False
         self.token_budget.rate_limit_until = None
         self.token_budget.backoff_level = 0
+        self.token_budget.rate_limit_since = None
         self._save()
 
     def increment_backoff(self) -> int:
-        """Increment backoff level and return next wait seconds"""
+        """Increment backoff level and return next wait seconds (max 1 hour)"""
         self.token_budget.backoff_level += 1
-        wait_seconds = 60 * (2 ** (self.token_budget.backoff_level - 1))
+        wait_seconds = min(60 * (2 ** (self.token_budget.backoff_level - 1)), 3600)
         self._save()
         return wait_seconds
 

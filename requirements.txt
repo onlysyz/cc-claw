@@ -1,6 +1,7 @@
 # Client
 websockets>=12.0
 aiohttp>=3.9.0
+anthropic>=0.25.0
 
 # Server
 fastapi>=0.109.0

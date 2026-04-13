@@ -4,11 +4,18 @@
 import argparse
 import asyncio
 import logging
+import os
 import sys
 import uuid
 import platform
+from pathlib import Path
+
+from dotenv import load_dotenv
 
 from client import ClientConfig, PairingInfo, CCClawDaemon, APIClient
+
+# Load .env file if it exists
+load_dotenv(Path(__file__).parent / ".env")
 
 
 logging.basicConfig(
@@ -367,9 +374,190 @@ def cmd_install(args):
     cmd_start(args)
 
 
+def cmd_solve(args):
+    """Search AgentSolveHub for solutions"""
+    from client import AgentSolveHubPlugin
+
+    ash = AgentSolveHubPlugin()
+
+    query = args.query
+    print(f"🔍 Searching AgentSolveHub for: {query}\n")
+
+    solutions = ash.search_solutions(query, platform=args.platform, limit=args.limit)
+
+    if not solutions:
+        print("❌ No solutions found.")
+        print("\nTry:")
+        print("  - Different keywords")
+        print("  - Broader search terms")
+        print("  - Submit this problem at https://agentsolvehub.com")
+        return
+
+    print(f"✅ Found {len(solutions)} solutions:\n")
+
+    for i, sol in enumerate(solutions, 1):
+        print(f"{i}. {sol.title}")
+        print(f"   Platform: {sol.platform}")
+        print(f"   👍 {sol.vote_count} votes | 👁 {sol.view_count} views")
+        print(f"   {sol.content[:150]}...")
+        if sol.steps:
+            print(f"   📋 {len(sol.steps)} steps")
+        print()
+
+    print("---")
+    print("💡 Solutions powered by AgentSolveHub")
+    print("   Submit your solutions at https://agentsolvehub.com")
+
+
+def cmd_submit(args):
+    """Submit a solution to AgentSolveHub"""
+    from client import AgentSolveHubPlugin
+
+    ash = AgentSolveHubPlugin()
+
+    print(f"📤 Submitting solution to AgentSolveHub...\n")
+    print(f"  Title: {args.title[:50]}...")
+    print(f"  Type: {args.type}")
+    print(f"  Platform: {args.platform or 'cc-claw'}")
+
+    # First submit a problem, then submit solution
+    problem_id = ash.submit_problem(
+        title=args.title[:100],
+        goal=args.content[:500],
+        platform_name=args.platform or "cc-claw",
+        task_type=args.type,
+    )
+
+    if not problem_id:
+        print("\n❌ Failed to submit problem. Check your API key.")
+        print("   Make sure you're registered: cc-claw solvehub register")
+        return
+
+    solution_id = ash.submit_solution(
+        problem_id=problem_id,
+        title=args.title[:100],
+        steps=[{"order": 1, "content": args.content[:500]}],
+    )
+
+    if solution_id:
+        print(f"\n✅ Solution submitted!")
+        print(f"   Problem ID: {problem_id}")
+        print(f"   Solution ID: {solution_id}")
+        print(f"   View at: https://agentsolvehub.com")
+    else:
+        print("\n❌ Submission failed. Check your API key.")
+
+
+def cmd_solvehub_export(args):
+    """Export CC-Claw solutions to AgentSolveHub"""
+    from client import AgentSolveHubPlugin
+
+    ash = AgentSolveHubPlugin()
+
+    print("🚀 CC-Claw → AgentSolveHub Export\n")
+
+    # Check API key
+    if not ash._api_key:
+        print("⚠️  No API key found.")
+        print("   Options:")
+        print("   1. Run 'cc-claw solvehub register' to register")
+        print("   2. Set AGENTSOLVEHUB_API_KEY environment variable")
+        print("   3. Set 'export AGENTSOLVEHUB_API_KEY=your_key'")
+        print("\n   Registering now...")
+        try:
+            ash.register()
+            print("   ✅ Registration successful!")
+        except Exception as e:
+            print(f"   ❌ Registration failed: {e}")
+            return
+
+    # Export built-in solutions as problems with solutions
+    problems_submitted = 0
+    solutions_submitted = 0
+
+    for sol in ash.BUILTIN_SOLUTIONS:
+        print(f"📤 Exporting: {sol.title[:50]}...")
+
+        # Submit as problem
+        problem_id = ash.submit_problem(
+            title=sol.title[:100],
+            goal=f"CC-Claw feature: {sol.title}",
+            platform_name="cc-claw",
+            task_type="feature",
+        )
+
+        if problem_id:
+            print(f"   ✅ Problem submitted (ID: {problem_id})")
+            problems_submitted += 1
+
+            # Submit as solution
+            solution_id = ash.submit_solution(
+                problem_id=problem_id,
+                title=f"Solution: {sol.title}",
+                steps=sol.steps,
+                root_cause=sol.content[:200],
+            )
+
+            if solution_id:
+                print(f"   ✅ Solution submitted (ID: {solution_id})")
+                solutions_submitted += 1
+            else:
+                print(f"   ⚠️  Problem submitted but solution failed")
+        else:
+            print(f"   ⚠️  Rate limited or API error")
+
+        import time
+        time.sleep(0.5)  # Rate limiting
+
+    print(f"\n✅ Export complete!")
+    print(f"   Problems submitted: {problems_submitted}")
+    print(f"   Solutions submitted: {solutions_submitted}")
+    print(f"\n   View at: https://agentsolvehub.com/platform/cc-claw")
+
+
+def cmd_solvehub_list(args):
+    """List available CC-Claw solutions"""
+    from client import AgentSolveHubPlugin
+
+    ash = AgentSolveHubPlugin()
+
+    print("📚 CC-Claw Built-in Solutions\n")
+    print(f"{'ID':<12} {'Title':<50} {'Votes':<8} {'Tags'}")
+    print("-" * 100)
+
+    for sol in ash.BUILTIN_SOLUTIONS:
+        tags = ", ".join(sol.tags[:2])
+        print(f"{sol.id:<12} {sol.title[:48]:<50} {sol.vote_count:<8} {tags}")
+
+    print(f"\nTotal: {len(ash.BUILTIN_SOLUTIONS)} solutions")
+    print("\nUse 'cc-claw solve <query>' to search for solutions")
+
+
+def cmd_solvehub_register(args):
+    """Register CC-Claw as an AgentSolveHub agent"""
+    from client import AgentSolveHubPlugin
+
+    ash = AgentSolveHubPlugin()
+
+    print("🚀 Registering CC-Claw with AgentSolveHub...\n")
+
+    try:
+        result = ash.register()
+        print("✅ Registration successful!")
+        print(f"\n   Agent ID: {result['agent']['agentId']}")
+        print(f"   API Key: {result['apiKey'][:20]}...")
+        print(f"\n   Credentials saved to: ~/.config/agentsolvehub/credentials.json")
+        print("\n   Next steps:")
+        print("   - cc-claw solvehub export  # Export built-in solutions")
+        print("   - cc-claw solve 'docker error'  # Search for solutions")
+    except Exception as e:
+        print(f"❌ Registration failed: {e}")
+        print("\n   Make sure you're connected to AgentSolveHub API.")
+
+
 def main():
     parser = argparse.ArgumentParser(
-        description="CC-Claw - Telegram bot to control Claude Code CLI"
+        description="CC-Claw - Autonomous AI coding agent for Claude Code"
     )
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
@@ -406,6 +594,45 @@ def main():
     # install
     parser_install = subparsers.add_parser("install", help="One-command install: setup + pair + start")
     parser_install.set_defaults(func=cmd_install)
+
+    # solve - Search AgentSolveHub
+    parser_solve = subparsers.add_parser("solve", help="Search AgentSolveHub for solutions")
+    parser_solve.add_argument("query", help="Search query")
+    parser_solve.add_argument("--platform", "-p", default=None, help="Filter by platform")
+    parser_solve.add_argument("--limit", "-l", type=int, default=5, help="Max results (default: 5)")
+    parser_solve.set_defaults(func=cmd_solve)
+
+    # submit - Submit to AgentSolveHub
+    parser_submit = subparsers.add_parser("submit", help="Submit a solution to AgentSolveHub")
+    parser_submit.add_argument("--title", "-t", required=True, help="Solution title")
+    parser_submit.add_argument("--content", "-c", required=True, help="Solution content")
+    parser_submit.add_argument("--type", default="feature", help="Type (feature/debug/refactor)")
+    parser_submit.add_argument("--platform", "-p", default="cc-claw", help="Platform name")
+    parser_submit.add_argument("--tags", help="Comma-separated tags")
+    parser_submit.set_defaults(func=cmd_submit)
+
+    # solvehub - AgentSolveHub integration
+    parser_solvehub = subparsers.add_parser("solvehub", help="AgentSolveHub integration")
+    subparsers_solvehub = parser_solvehub.add_subparsers(dest="solvehub_action", help="Action")
+
+    # solvehub register
+    parser_solvehub_register = subparsers_solvehub.add_parser("register", help="Register CC-Claw as agent")
+    parser_solvehub_register.set_defaults(func=cmd_solvehub_register)
+
+    # solvehub list
+    parser_solvehub_list = subparsers_solvehub.add_parser("list", help="List available solutions")
+    parser_solvehub_list.set_defaults(func=cmd_solvehub_list)
+
+    # solvehub export
+    parser_solvehub_export = subparsers_solvehub.add_parser("export", help="Export solutions to AgentSolveHub")
+    parser_solvehub_export.set_defaults(func=cmd_solvehub_export)
+
+    # Top-level aliases for convenience
+    parser_solvehub_list_alias = subparsers.add_parser("solvehub-list", help="List CC-Claw solutions")
+    parser_solvehub_list_alias.set_defaults(func=cmd_solvehub_list)
+
+    parser_solvehub_export_alias = subparsers.add_parser("solvehub-export", help="Export solutions to AgentSolveHub")
+    parser_solvehub_export_alias.set_defaults(func=cmd_solvehub_export)
 
     args = parser.parse_args()
 

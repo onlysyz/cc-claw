@@ -101,6 +101,13 @@ class WebSocketManager:
             "message_id": message_id,
         })
 
+    async def send_notification(self, content: str) -> bool:
+        """Send an autonomous notification to user (no reply-to message_id)"""
+        return await self.send({
+            "type": "notification",
+            "content": content,
+        })
+
     async def register(self) -> bool:
         """Register device with server"""
         if not self.config.device_id or not self.config.device_token:

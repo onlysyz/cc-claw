@@ -30,9 +30,10 @@ class ClaudeExecutor:
         env["IS_SANDBOX"] = "1"
         return env
 
-    async def execute(self, prompt: str) -> Tuple[str, List[str]]:
+    async def execute(self, prompt: str) -> Tuple[str, List[str], dict]:
         """Execute a prompt using --print mode with JSON output
-        Returns: (text_response, list_of_image_paths)
+        Returns: (text_response, list_of_image_paths, raw_json_data)
+        raw_json_data contains the full parsed JSON including 'usage' field for token tracking
         """
         import os
         work_dir = getattr(self.config, 'working_dir', '/') or '/'
@@ -97,19 +98,19 @@ class ClaudeExecutor:
                         file_paths = self._extract_file_paths(result)
                         logger.info(f"Extracted file paths: {file_paths}")
 
-                        return result, file_paths
+                        return result, file_paths, data
 
                 # If no valid JSON, return raw output
                 if output:
                     logger.info(f"Claude raw response: {output[:100]}...")
-                    return output.strip(), []
+                    return output.strip(), [], {}
 
-                return "No response", []
+                return "No response", [], {}
 
             except json.JSONDecodeError as e:
                 logger.error(f"Failed to parse JSON: {e}")
                 logger.error(f"Raw output: {output[:500]}")
-                return f"Error parsing response: {output[:200]}", []
+                return f"Error parsing response: {output[:200]}", [], {}
 
         except asyncio.TimeoutError:
             logger.error("Timeout waiting for Claude")

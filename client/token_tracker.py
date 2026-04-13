@@ -152,6 +152,24 @@ class TokenTracker:
 
         return result, usage, is_rate_limited
 
+    def _build_usage(self, usage_data: dict) -> Optional[TokenUsage]:
+        """Build TokenUsage from raw usage dict (from parsed JSON)"""
+        if not usage_data:
+            return None
+        try:
+            input_tok = usage_data.get('input_tokens', 0)
+            output_tok = usage_data.get('output_tokens', 0)
+            total = input_tok + output_tok
+            cost = self._estimate_cost(total, input_tok, output_tok)
+            return TokenUsage(
+                input_tokens=input_tok,
+                output_tokens=output_tok,
+                total_tokens=total,
+                cost_usd=cost,
+            )
+        except Exception:
+            return None
+
     def _estimate_cost(self, total: int, input_tok: int, output_tok: int) -> Optional[float]:
         """Estimate cost in USD based on model pricing"""
         pricing = self.PRICING.get(self.model)

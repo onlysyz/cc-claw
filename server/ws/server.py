@@ -322,6 +322,21 @@ class WebSocketServer:
                 # Message acknowledged
                 logger.debug(f"Message {data.get('message_id')} acknowledged")
 
+            elif msg_type == "notification":
+                # Autonomous notification from device to user (e.g. task completed)
+                # Use client stored lark_open_id if not explicitly provided in message
+                content = data.get("content", "")
+                lark_open_id = data.get("lark_open_id") or client.lark_open_id
+                user_id = data.get("user_id") or client.user_id
+                is_lark = bool(lark_open_id)
+
+                if is_lark and lark_open_id:
+                    from ..bot import send_lark_message
+                    if content:
+                        send_lark_message(lark_open_id, content)
+                elif user_id:
+                    await self._send_to_telegram(user_id, content)
+
             elif msg_type == "error":
                 # Device error
                 error_code = data.get("code", "UNKNOWN")

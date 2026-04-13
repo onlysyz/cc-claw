@@ -180,15 +180,15 @@ class LarkBot:
             if not user:
                 user = storage.get_or_create_user_by_lark(open_id)
 
+            # Check if it's a command (must check BEFORE onboarding state — commands work during onboarding too)
+            if text.startswith("/"):
+                return self._handle_command(open_id, text, message.message_id, user)
+
             # Check onboarding state
             state = user.get("onboarding_state", "pending")
             logger.info(f"Onboarding state for {open_id}: {state}")
             if state != "complete":
                 return self._handle_onboarding_message(open_id, text, user)
-
-            # Check if it's a command
-            if text.startswith("/"):
-                return self._handle_command(open_id, text, message.message_id, user)
 
             # Normal message — forward to device
             return self._handle_normal_message(open_id, text, message.message_id, user)
@@ -311,18 +311,6 @@ class LarkBot:
                 f"👋 让我们开始吧！\n\n"
                 f"{ONBOARDING_STEPS[0][1]}\n\n"
                 "直接输入你的回答即可。"
-            )
-            return
-            self._send_lark_message(open_id,
-                "👋 欢迎回到 CC-Claw！\n"
-                "你的 AI 伙伴正在为你工作。\n\n"
-                "命令：\n"
-                "/progress - 查看进度\n"
-                "/pause - 暂停自动执行\n"
-                "/resume - 恢复自动执行\n"
-                "/goals - 查看所有目标\n"
-                "/status - 连接状态\n"
-                "/help - 帮助"
             )
             return
 

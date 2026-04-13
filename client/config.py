@@ -23,18 +23,30 @@ class ClientConfig:
     permission_mode: str = "default"
     # Working directory for Claude sessions
     working_dir: str = "/"
+    # MiniMax API for goal decomposition (saves Claude Code tokens)
+    minimax_api_key: Optional[str] = None
+    minimax_api_url: str = "https://api.minimaxi.com/anthropic"
+    minimax_model: str = "MiniMax-M2.7"
 
     @classmethod
     def load(cls, config_path: Optional[Path] = None) -> "ClientConfig":
-        """Load configuration from file"""
+        """Load configuration from file and environment variables"""
         if config_path is None:
             config_path = cls.get_default_config_path()
 
+        # Load from config file first, then override with env vars
+        config_data = {}
         if config_path.exists():
             with open(config_path) as f:
-                data = json.load(f)
-                return cls(**data)
-        return cls()
+                config_data = json.load(f)
+
+        # Override with environment variables (for secrets like API keys)
+        if os.environ.get("ANTHROPIC_API_KEY"):
+            config_data["minimax_api_key"] = os.environ.get("ANTHROPIC_API_KEY")
+        if os.environ.get("ANTHROPIC_BASE_URL"):
+            config_data["minimax_api_url"] = os.environ.get("ANTHROPIC_BASE_URL")
+
+        return cls(**config_data) if config_data else cls()
 
     def save(self, config_path: Optional[Path] = None):
         """Save configuration to file"""

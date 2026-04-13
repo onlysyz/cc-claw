@@ -11,6 +11,7 @@ from .config import ClientConfig
 from .scheduler import TaskScheduler
 from .profile import ProfileManager
 from .token_tracker import TokenTracker
+from .memory import PersistentMemory, ConversationMemory
 from .tools import (
     FileProcessor, DataScraper, ApiClient,
     ProcessManager, SystemInfo, GitHelper, DockerHelper,
@@ -33,6 +34,7 @@ class MessageHandler:
         profile: ProfileManager,
         queue_manager=None,
         goal_engine=None,
+        memory: PersistentMemory = None,
         on_autonomous_start: Optional[Callable[[], None]] = None,  # callback to start runner
         on_message_sent: Optional[Callable[[str], Awaitable[None]]] = None,
     ):
@@ -43,10 +45,13 @@ class MessageHandler:
         self.profile = profile
         self.queue_manager = queue_manager
         self.goal_engine = goal_engine
+        self.memory = memory
         self.on_autonomous_start = on_autonomous_start
         self.on_message_sent = on_message_sent
         self.token_tracker = TokenTracker()
         self.autonomous_mode = True
+        # Short-term conversation memory
+        self.conversation_memory = ConversationMemory()
 
         # Register handlers
         self.ws.on("message", self.handle_message)
@@ -65,9 +70,23 @@ class MessageHandler:
 
             logger.info(f"Received message: {content[:50]}..., priority={is_priority}")
 
+            # Add to conversation memory
+            self.conversation_memory.add_user(content)
+
             # Send acknowledgment first
             if message_id:
                 await self.ws.send_ack(message_id)
+
+            # Check for /memory command (new)
+            if content.strip() == "/memory":
+                await self._handle_memory_command(message_id, lark_open_id)
+                return
+
+            # Check for /recall command (new)
+            if content.strip().startswith("/recall "):
+                query = content.strip()[8:].strip()
+                await self._handle_recall_command(query, message_id, lark_open_id)
+                return
 
             # Check for /delay command
             if content.startswith("/delay "):
@@ -109,6 +128,35 @@ class MessageHandler:
                     await self.ws.send_message("❌ 用法: /setgoal <goal_id>\n先用 /goals 查看所有目标及其ID", message_id, [], lark_open_id)
                 return
 
+            # Check for /newgoal <description> command
+            if content.strip().startswith("/newgoal "):
+                desc = content.strip()[9:].strip()
+                if desc:
+                    await self._handle_newgoal_command(desc, message_id, lark_open_id)
+                else:
+                    await self.ws.send_message("❌ 用法: /newgoal <目标描述>\n例如: /newgoal 完成用户登录功能", message_id, [], lark_open_id)
+                return
+
+            # Check for /delgoal <id> command
+            if content.strip().startswith("/delgoal "):
+                parts = content.strip().split(" ", 1)
+                if len(parts) > 1:
+                    goal_id = parts[1].strip()
+                    await self._handle_delgoal_command(goal_id, message_id, lark_open_id)
+                else:
+                    await self.ws.send_message("❌ 用法: /delgoal <goal_id>", message_id, [], lark_open_id)
+                return
+
+            # Check for /deltask <id> command
+            if content.strip().startswith("/deltask "):
+                parts = content.strip().split(" ", 1)
+                if len(parts) > 1:
+                    task_id = parts[1].strip()
+                    await self._handle_deltask_command(task_id, message_id, lark_open_id)
+                else:
+                    await self.ws.send_message("❌ 用法: /deltask <task_id>", message_id, [], lark_open_id)
+                return
+
             # User message — if priority, insert at front of queue (don't execute now)
             if is_priority and self.queue_manager:
                 # Enqueue for autonomous execution (user's command goes to front)
@@ -124,19 +172,40 @@ class MessageHandler:
 
             # Execute with Claude
             logger.info("Calling Claude executor...")
-            response, images = await self.claude.execute(content)
+
+            # Build context from conversation memory and persistent memory
+            context_addon = ""
+            if self.memory:
+                resume_context = self.memory.get_context_for_resume()
+                if resume_context:
+                    context_addon = f"\n\n{resume_context}\n"
+
+            # Include recent conversation history
+            recent_history = self.conversation_memory.get_formatted(n=5)
+            if recent_history:
+                context_addon += f"\n\n{recent_history}\n"
+
+            # Execute with enhanced context
+            full_prompt = content + context_addon if context_addon else content
+            response, images, raw_data = await self.claude.execute(full_prompt)
             logger.info(f"Claude response: {response[:100]}...")
 
-            # Parse response for token usage and 429
-            result_text, usage, is_rate_limited = self.token_tracker.parse_json_response(
-                response if not images else ""
-            )
-            if usage:
-                self.profile.record_usage(usage.total_tokens)
-                logger.info(f"Token usage recorded: {usage.total_tokens}")
+            # Add assistant response to conversation memory
+            self.conversation_memory.add_assistant(response)
+
+            # Extract token usage from raw JSON data
+            usage = None
+            if raw_data and 'usage' in raw_data:
+                usage = self.token_tracker._build_usage(raw_data['usage'])
+                if usage:
+                    self.profile.record_usage(usage.total_tokens)
+                    logger.info(f"Token usage recorded: {usage.total_tokens}")
+
+            # Detect rate limit from response text
+            is_rate_limited = self.token_tracker._detect_rate_limit(response)
 
             if is_rate_limited or "429" in response:
-                self.profile.set_rate_limited(asyncio.get_event_loop().time())
+                self.profile.set_rate_limited(datetime.now())
                 logger.warning("Rate limit detected!")
 
             if images:
@@ -144,9 +213,8 @@ class MessageHandler:
 
             # Send response back to server
             if message_id:
-                final_response = result_text if result_text else response
                 success = await asyncio.wait_for(
-                    self.ws.send_message(final_response, message_id, images, lark_open_id),
+                    self.ws.send_message(response, message_id, images, lark_open_id),
                     timeout=30
                 )
                 logger.info(f"Response sent: {success}")
@@ -246,6 +314,49 @@ class MessageHandler:
             response = f"❌ 安排任务失败: {e}"
             await self.ws.send_message(response, message_id, [], lark_open_id)
 
+    async def _handle_memory_command(self, message_id: str, lark_open_id: str = None):
+        """Handle /memory command - show memory stats and recent entries"""
+        if not self.memory:
+            response = "❌ Memory not available"
+            await self.ws.send_message(response, message_id, [], lark_open_id)
+            return
+
+        stats = self.memory.get_stats()
+        recent = self.memory.get_recent(limit=5)
+
+        lines = ["🧠 **Memory Status**\n"]
+        lines.append(f"Session: {stats['session_id']}")
+        lines.append(f"Total entries: {stats['total_entries']}")
+        lines.append(f"Categories: {stats['categories']}")
+        lines.append(f"Tags: {', '.join(stats['all_tags'][:10]) or 'none'}")
+        lines.append("\n**Recent Entries:**\n")
+
+        for entry in recent:
+            lines.append(f"[{entry.category}] {entry.content[:80]}...")
+
+        response = "\n".join(lines)
+        await self.ws.send_message(response, message_id, [], lark_open_id)
+
+    async def _handle_recall_command(self, query: str, message_id: str, lark_open_id: str = None):
+        """Handle /recall <query> command - search memory"""
+        if not self.memory:
+            response = "❌ Memory not available"
+            await self.ws.send_message(response, message_id, [], lark_open_id)
+            return
+
+        results = self.memory.search(query, limit=5)
+
+        if not results:
+            response = f"🔍 No memories found for: {query}"
+        else:
+            lines = [f"🔍 **Memory Search: {query}**\n"]
+            for entry in results:
+                lines.append(f"[{entry.category}] {entry.content[:100]}...")
+                lines.append(f"   {entry.timestamp}\n")
+            response = "\n".join(lines)
+
+        await self.ws.send_message(response, message_id, [], lark_open_id)
+
     async def _handle_tasks_command(self, message_id: str, lark_open_id: str = None):
         """Handle /tasks command"""
         response = self.scheduler.format_tasks_list()
@@ -312,6 +423,80 @@ class MessageHandler:
         else:
             response = f"❌ 未找到目标 {goal_id}，或目标不是 active 状态。\n先用 /goals 查看所有目标。"
         await self.ws.send_message(response, message_id, [], lark_open_id)
+
+    async def _handle_newgoal_command(self, description: str, message_id: str, lark_open_id: str = None):
+        """Handle /newgoal <description> - create a new goal and decompose it"""
+        goal = self.profile.add_goal(description)
+        response = f"🎯 目标已创建:\n[{goal.id[:8]}] {description}\n\n正在分解任务..."
+        await self.ws.send_message(response, message_id, [], lark_open_id)
+        logger.info(f"Created new goal: {goal.id} - {description}")
+
+        # Decompose goal into tasks using MiniMax
+        if self.goal_engine:
+            tasks = await self.goal_engine.decompose_goal(goal.id)
+            if tasks:
+                await self.ws.send_message(
+                    f"✅ 已分解为 {len(tasks)} 个任务:\n" +
+                    "\n".join(f"{i+1}. {t.description[:50]}" for i, t in enumerate(tasks[:10])),
+                    message_id, [], lark_open_id
+                )
+            else:
+                await self.ws.send_message("⚠️ 任务分解失败，请稍后重试。", message_id, [], lark_open_id)
+
+    async def _handle_delgoal_command(self, goal_id: str, message_id: str, lark_open_id: str = None):
+        """Handle /delgoal <id> - delete a goal and all its tasks"""
+        # Find goal
+        goal = None
+        for g in self.profile.goals:
+            if g.id == goal_id:
+                goal = g
+                break
+        if not goal:
+            await self.ws.send_message(f"❌ 未找到目标 {goal_id[:8]}", message_id, [], lark_open_id)
+            return
+
+        # Remove tasks belonging to this goal
+        tasks = self.profile.get_tasks_for_goal(goal_id)
+        for t in tasks:
+            self.profile.tasks.remove(t)
+        # Remove goal
+        self.profile.goals.remove(goal)
+        # If this was active goal, switch to another
+        if self.profile.active_goal_id == goal_id:
+            active = self.profile.get_active_goals()
+            self.profile.active_goal_id = active[0].id if active else None
+        self.profile._save()
+
+        await self.ws.send_message(
+            f"🗑️ 已删除目标 [{goal_id[:8]}] 及其 {len(tasks)} 个任务",
+            message_id, [], lark_open_id
+        )
+        logger.info(f"Deleted goal: {goal_id}")
+
+    async def _handle_deltask_command(self, task_id: str, message_id: str, lark_open_id: str = None):
+        """Handle /deltask <id> - delete a pending task"""
+        task = None
+        for t in self.profile.tasks:
+            if t.id == task_id:
+                task = t
+                break
+        if not task:
+            await self.ws.send_message(f"❌ 未找到任务 {task_id[:8]}", message_id, [], lark_open_id)
+            return
+
+        if task.status.value not in ("pending", "failed"):
+            await self.ws.send_message(f"❌ 任务 {task_id[:8]} 正在执行或已完成，无法删除。", message_id, [], lark_open_id)
+            return
+
+        self.profile.tasks.remove(task)
+        # Also remove from goal's task_ids
+        for g in self.profile.goals:
+            if task.id in g.task_ids:
+                g.task_ids.remove(task.id)
+        self.profile._save()
+
+        await self.ws.send_message(f"🗑️ 已删除任务 [{task_id[:8]}]: {task.description[:50]}", message_id, [], lark_open_id)
+        logger.info(f"Deleted task: {task_id}")
 
     async def handle_tasks_request(self, message: Message):
         """Handle tasks list request from server"""
