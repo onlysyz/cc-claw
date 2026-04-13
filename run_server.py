@@ -6,6 +6,8 @@ import logging
 import signal
 import sys
 import threading
+from dotenv import load_dotenv
+load_dotenv()
 
 from server.config import config
 from server.bot import telegram_bot, lark_bot
