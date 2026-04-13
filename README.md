@@ -179,11 +179,16 @@ ngrok http 4001
 #### 7. 启动客户端（配对设备）
 
 ```bash
-# 新终端窗口
-python3 -m cli pair --server ws://localhost:4001
+# 先配置服务器地址
+python3 -m cli config --set server_ws_url=ws://localhost:4001
+python3 -m cli config --set server_api_url=http://localhost:4000
 
 # 或连接远程服务器
-python3 -m cli pair --server wss://your-server.com:4001
+python3 -m cli config --set server_ws_url=wss://your-server.com:4001
+python3 -m cli config --set server_api_url=https://your-server.com:4000
+
+# 然后进行配对
+python3 -m cli pair
 ```
 
 #### 8. 在飞书中使用
