@@ -377,8 +377,12 @@ class CCClawDaemon:
             self.queue_manager.queue.mark_done()
 
         # Always send notification when task ends (success or failure)
+        logger.info(f"Notification check: ws_manager={self.ws_manager is not None}, connected={self.ws_manager.is_connected if self.ws_manager else False}, msg={bool(notify_msg)}")
         if self.ws_manager and self.ws_manager.is_connected and notify_msg:
             await self.ws_manager.send_notification(notify_msg)
+            logger.info(f"Notification sent: {notify_msg[:50]}...")
+        else:
+            logger.warning(f"Notification NOT sent: ws_manager={self.ws_manager}, connected={getattr(self.ws_manager, 'is_connected', None)}, msg_len={len(notify_msg) if notify_msg else 0}")
 
     async def _task_checker(self):
         """Background task to check and execute due tasks"""
