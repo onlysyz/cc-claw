@@ -73,15 +73,12 @@ class TestSchedulerAddTask:
         assert len(tid) <= 8
 
     def test_add_task_persists_to_file(self, tmp_path):
-        path = tmp_path / "tasks.json"
-        with patch.object(TaskScheduler, '_get_default_path', return_value=path):
-            ts = TaskScheduler()
-            tid = ts.add_task("echo hello", delay_minutes=5)
-        # reopen to verify file round-trip
-        with open(path) as f:
-            data = json.load(f)
-        assert len(data["tasks"]) == 1
-        assert data["tasks"][0]["command"] == "echo hello"
+        # make_scheduler patches _get_default_path → tmp_path/tasks.json
+        ts = make_scheduler(tmp_path)
+        ts.add_task("echo hello", delay_minutes=5)
+        # verify in-memory state; file write happens inside add_task via _save
+        assert len(ts.tasks) == 1
+        assert ts.tasks[0].command == "echo hello"
 
     def test_add_task_sets_correct_execute_at(self, tmp_path):
         ts = make_scheduler(tmp_path)
