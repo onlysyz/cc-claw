@@ -183,9 +183,11 @@ ngrok http 4001
 python3 -m cli config --set server_ws_url=ws://localhost:4001
 python3 -m cli config --set server_api_url=http://localhost:4000
 
-# 或连接远程服务器
-python3 -m cli config --set server_ws_url=wss://your-server.com:4001
-python3 -m cli config --set server_api_url=https://your-server.com:4000
+# 设置工作目录（Claude Code 在此目录下工作）
+python3 -m cli config --set working_dir=/path/to/your/project
+
+# 设置权限模式（跳过授权确认，否则 Claude 会等待交互）
+python3 -m cli config --set permission_mode=bypassPermissions
 
 # 然后进行配对
 python3 -m cli pair

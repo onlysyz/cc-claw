@@ -177,8 +177,8 @@ class WebSocketManager:
 
     @property
     def is_connected(self) -> bool:
-        """Check if connected"""
-        if not self._running or not self.ws:
+        """Check if WebSocket is connected and can send messages"""
+        if not self.ws:
             return False
         is_open = getattr(self.ws, 'is_open', None)
         if is_open is not None:
