@@ -277,6 +277,26 @@ class CCClawDaemon:
                 logger.info(f"[AUTONOMOUS] Executing task: {qt.task.description[:60]}...")
                 await self._execute_autonomous_task(qt)
 
+                # After task execution, check if we need to continue
+                goal = self.profile.get_active_goal()
+                if goal:
+                    pending = [t for t in self.profile.get_tasks_for_goal(goal.id)
+                               if t.status.value == "pending"]
+                    if not pending:
+                        # Goal complete — suggest new goal immediately
+                        logger.info(f"Goal '{goal.description}' complete, suggesting new goal...")
+                        suggested = await self._suggest_new_goal()
+                        if suggested:
+                            new_goal = self.profile.add_goal(suggested)
+                            logger.info(f"New goal suggested: {new_goal.description}")
+                            tasks = await self.goal_engine.decompose_goal(new_goal.id)
+                            if tasks:
+                                for t in tasks:
+                                    self.queue_manager.queue.enqueue(t, user_initiated=False)
+                                logger.info(f"Enqueued {len(tasks)} new tasks")
+                        else:
+                            logger.info("No goal suggested, will retry later")
+
             except Exception as e:
                 logger.error(f"Error in autonomous runner: {e}", exc_info=True)
                 await asyncio.sleep(10)
@@ -397,12 +417,14 @@ class CCClawDaemon:
             self.queue_manager.queue.mark_done()
 
         # Always send notification when task ends (success or failure)
-        logger.info(f"Notification check: ws_manager={self.ws_manager is not None}, connected={self.ws_manager.is_connected if self.ws_manager else False}, msg={bool(notify_msg)}")
         if self.ws_manager and self.ws_manager.is_connected and notify_msg:
-            await self.ws_manager.send_notification(notify_msg)
-            logger.info(f"Notification sent: {notify_msg[:50]}...")
-        else:
-            logger.warning(f"Notification NOT sent: ws_manager={self.ws_manager}, connected={getattr(self.ws_manager, 'is_connected', None)}, msg_len={len(notify_msg) if notify_msg else 0}")
+            success = await self.ws_manager.send_notification(notify_msg)
+            if success:
+                logger.info(f"Notification sent: {notify_msg[:50]}...")
+            else:
+                logger.warning(f"Failed to send notification")
+        elif notify_msg:
+            logger.warning(f"Notification not sent: ws_manager={self.ws_manager is not None}, connected={getattr(self.ws_manager, 'is_connected', False)}")
 
     async def _suggest_new_goal(self) -> Optional[str]:
         """Ask Claude to suggest a new goal based on user's context and current situation"""
