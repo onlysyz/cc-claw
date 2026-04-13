@@ -114,10 +114,10 @@ class ClaudeExecutor:
 
         except asyncio.TimeoutError:
             logger.error("Timeout waiting for Claude")
-            return "Timeout", []
+            return "Timeout", [], {}
         except Exception as e:
             logger.error(f"Error running Claude: {e}", exc_info=True)
-            return f"Error: {str(e)}", []
+            return f"Error: {str(e)}", [], {}
 
     def _get_screenshot_files(self, work_dir: str) -> set:
         """Get list of existing screenshot files"""
