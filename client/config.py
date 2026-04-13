@@ -15,7 +15,7 @@ class ClientConfig:
     device_token: Optional[str] = None
     device_id: Optional[str] = None
     claude_path: str = "claude"
-    timeout: int = 300  # 5 minutes
+    timeout: int = 600  # 10 minutes
     auto_reconnect: bool = True
     reconnect_delay: int = 5
     log_level: str = "INFO"
