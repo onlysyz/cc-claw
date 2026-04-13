@@ -410,9 +410,9 @@ class CCClawDaemon:
                         })
 
             notify_status = "completed"
-            task_num = len([t for t in self.profile.get_tasks_for_goal(goal.id)
+            task_num = len([t for t in self.profile.get_tasks_for_goal(goal_id)
                            if t.status.value == "completed"])
-            total = len(self.profile.get_tasks_for_goal(goal.id))
+            total = len(self.profile.get_tasks_for_goal(goal_id))
             notify_msg = f"✅ Task done [{task_num}/{total}]\n📋 {task.description}\n📤 {result_summary}"
 
         except MaxRetriesExceeded as e:
