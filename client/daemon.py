@@ -223,6 +223,22 @@ class CCClawDaemon:
                 # Get active goal (the one we're currently working on)
                 goal = self.profile.get_active_goal()
                 if not goal:
+                    # No active goal — check if queue has tasks with an existing goal
+                    qt = await self.queue_manager.get_next_task()
+                    if qt and qt.task.goal_id:
+                        # Find the goal for this task
+                        for g in self.profile.goals:
+                            if g.id == qt.task.goal_id:
+                                goal = g
+                                self.profile.set_active_goal(g.id)
+                                logger.info(f"Resuming goal: {g.description}")
+                                break
+                        if not goal:
+                            # Put task back and suggest new goal
+                            self.queue_manager.queue.enqueue(qt.task, user_initiated=False)
+                            qt = None
+
+                if not goal:
                     # No active goals — ask Claude to suggest one based on context
                     if loop_count % 10 == 0:  # Don't spam every iteration
                         logger.info("No active goals, asking Claude to suggest a goal...")
@@ -458,10 +474,7 @@ Return format (MUST be valid JSON):
 No markdown, no explanation, just the JSON object."""
 
         try:
-            response, _, _ = await self.claude.execute(
-                prompt,
-                system_prompt="You are a helpful coding assistant that suggests actionable goals."
-            )
+            response, _, _ = await self.claude.execute(prompt)
 
             if response:
                 # Parse JSON response
