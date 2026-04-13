@@ -223,9 +223,29 @@ class CCClawDaemon:
                 # Get active goal (the one we're currently working on)
                 goal = self.profile.get_active_goal()
                 if not goal:
-                    # No active goals yet — wait
-                    if loop_count % 60 == 0:  # Log every ~5 min
-                        logger.info("No active goals, waiting...")
+                    # No active goals — ask Claude to suggest one based on context
+                    if loop_count % 10 == 0:  # Don't spam every iteration
+                        logger.info("No active goals, asking Claude to suggest a goal...")
+                        suggested_goal = await self._suggest_new_goal()
+                        if suggested_goal:
+                            goal = self.profile.add_goal(suggested_goal)
+                            logger.info(f"Claude suggested goal: {goal.description}")
+                            # Auto-decompose and enqueue
+                            new_tasks = await self.goal_engine.decompose_goal(goal.id)
+                            if new_tasks:
+                                for task in new_tasks:
+                                    self.queue_manager.queue.enqueue(task, user_initiated=False)
+                                logger.info(f"Enqueued {len(new_tasks)} tasks")
+                        else:
+                            if loop_count % 60 == 0:
+                                logger.info("No goal suggested, waiting...")
+                            await asyncio.sleep(5)
+                            continue
+                    else:
+                        await asyncio.sleep(5)
+                        continue
+
+                if not goal:
                     await asyncio.sleep(5)
                     continue
 
@@ -383,6 +403,65 @@ class CCClawDaemon:
             logger.info(f"Notification sent: {notify_msg[:50]}...")
         else:
             logger.warning(f"Notification NOT sent: ws_manager={self.ws_manager}, connected={getattr(self.ws_manager, 'is_connected', None)}, msg_len={len(notify_msg) if notify_msg else 0}")
+
+    async def _suggest_new_goal(self) -> Optional[str]:
+        """Ask Claude to suggest a new goal based on user's context and current situation"""
+        p = self.profile.profile
+        if not p or not p.onboarding_completed:
+            logger.info("Profile not onboarded, cannot suggest goal")
+            return None
+
+        # Build context from memory and profile
+        memory_context = ""
+        if self.memory:
+            recent = self.memory.get_recent_context(limit=5)
+            if recent:
+                memory_context = "Recent context:\n" + "\n".join(f"- {c}" for c in recent) + "\n\n"
+
+        prompt = f"""You are an AI coding assistant. Based on the user's context, suggest ONE concrete goal they should work on.
+
+User Context:
+- Profession: {p.profession}
+- Current Situation: {p.situation}
+- Short-term Goal: {p.short_term_goal}
+- What 'Better' Means: {p.what_better_means}
+
+{memory_context}Current project state: Review what files exist in the working directory and determine what would be most valuable to work on next.
+
+Based on the context and project state, suggest ONE specific, actionable goal. This should be something achievable in 1-3 coding sessions.
+
+Return format (MUST be valid JSON):
+{{"goal": "your goal description here"}}
+
+No markdown, no explanation, just the JSON object."""
+
+        try:
+            response, _, _ = await self.claude.execute(
+                prompt,
+                system_prompt="You are a helpful coding assistant that suggests actionable goals."
+            )
+
+            if response:
+                # Parse JSON response
+                import json
+                try:
+                    # Find JSON in response
+                    json_start = response.find('{')
+                    if json_start != -1:
+                        data = json.loads(response[json_start:])
+                        if isinstance(data, dict) and "goal" in data:
+                            goal_text = data["goal"].strip()
+                            if goal_text:
+                                return goal_text
+                except (json.JSONDecodeError, ValueError) as e:
+                    logger.warning(f"Failed to parse goal suggestion: {e}")
+
+            logger.warning(f"No valid goal in response: {response[:100] if response else 'empty'}")
+            return None
+
+        except Exception as e:
+            logger.error(f"Error suggesting new goal: {e}")
+            return None
 
     async def _task_checker(self):
         """Background task to check and execute due tasks"""
