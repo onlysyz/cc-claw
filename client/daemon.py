@@ -241,6 +241,11 @@ class CCClawDaemon:
                         logger.warning(f"Could not decompose goal {goal.id}, waiting...")
                         await asyncio.sleep(30)
                         continue
+                    # Enqueue newly created tasks
+                    for task in new_tasks:
+                        self.queue_manager.queue.enqueue(task, user_initiated=False)
+                    logger.info(f"Enqueued {len(new_tasks)} new tasks for goal '{goal.description}'")
+                    continue
 
                 # Pop top task from queue (priority queue handles user tasks first)
                 qt = await self.queue_manager.get_next_task()
