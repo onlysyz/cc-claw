@@ -156,27 +156,7 @@ python run_server.py
 # 服务器日志显示 "WebSocket server started on 0.0.0.0:4001" 表示成功
 ```
 
-#### 5. 使用 ngrok 暴露本地服务器（如需公网访问）
-
-```bash
-# 安装 ngrok
-# macOS: brew install ngrok
-# Linux: sudo apt install ngrok
-
-# 启动隧道
-ngrok http 4001
-
-# 记录输出的 WebSocket URL，如：wss://xxxx.ngrok.io
-```
-
-#### 6. 配置飞书机器人事件请求地址
-
-在飞书开放平台 → 你的应用 → 事件订阅：
-
-- **请求地址 URL**: `https://your-domain.com/webhook/lark`
-- 如果使用 ngrok：`https://xxxx.ngrok.io/webhook/lark`
-
-#### 7. 启动客户端（配对设备）
+#### 5. 启动客户端（配对设备）
 
 ```bash
 # 先配置服务器地址
@@ -192,11 +172,11 @@ python3 -m cli config --set permission_mode=bypassPermissions
 # 然后进行配对
 python3 -m cli pair
 
-# 8. 启动守护进程
+# 6. 启动守护进程
 python3 -m cli start
 ```
 
-#### 8. 在飞书中使用
+#### 6. 在飞书中使用
 
 给机器人发送命令：
 
