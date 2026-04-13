@@ -436,9 +436,9 @@ class CCClawDaemon:
         # Build context from memory and profile
         memory_context = ""
         if self.memory:
-            recent = self.memory.get_recent_context(limit=5)
+            recent = self.memory.get_recent(limit=5)
             if recent:
-                memory_context = "Recent context:\n" + "\n".join(f"- {c}" for c in recent) + "\n\n"
+                memory_context = "Recent work:\n" + "\n".join(f"- {e.content[:100]}" for e in recent) + "\n\n"
 
         prompt = f"""You are an AI coding assistant. Based on the user's context, suggest ONE concrete goal they should work on.
 
