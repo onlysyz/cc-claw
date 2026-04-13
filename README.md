@@ -189,6 +189,9 @@ python3 -m cli config --set server_api_url=https://your-server.com:4000
 
 # 然后进行配对
 python3 -m cli pair
+
+# 8. 启动守护进程
+python3 -m cli start
 ```
 
 #### 8. 在飞书中使用
