@@ -49,6 +49,10 @@ cc-claw-server = "server.run:main"
 where = ["."]
 include = ["client*", "server*"]
 
+[tool.setuptools]
+# cli.py is a top-level module, must be included explicitly
+py-modules = ["cli"]
+
 [tool.black]
 line-length = 100
 target-version = ["py310"]
