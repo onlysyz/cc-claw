@@ -161,7 +161,14 @@ class MessageHandler:
             if is_priority and self.queue_manager:
                 # Enqueue for autonomous execution (user's command goes to front)
                 active_goals = self.profile.get_active_goals()
-                goal_id = active_goals[0].id if active_goals else "default"
+                if active_goals:
+                    goal_id = active_goals[0].id
+                else:
+                    # No active goal — create one from this user task so the runner
+                    # can match the task to a goal and execute it
+                    adhoc_goal = self.profile.add_goal(content[:100])
+                    goal_id = adhoc_goal.id
+                    logger.info(f"Created ad-hoc goal {goal_id} for user task")
                 self.queue_manager.add_user_task(content, goal_id)
                 logger.info(f"User task enqueued at front: {content[:50]}...")
                 # Acknowledge receipt

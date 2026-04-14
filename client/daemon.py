@@ -235,9 +235,15 @@ class CCClawDaemon:
                                 logger.info(f"Resuming goal: {g.description}")
                                 break
                         if not goal:
-                            # Put task back and suggest new goal
-                            self.queue_manager.queue.enqueue(qt.task, user_initiated=False)
-                            qt = None
+                            # No matching goal — execute the task directly rather
+                            # than re-enqueuing it forever
+                            logger.info(
+                                f"Task '{qt.task.description[:50]}' has unrecognised "
+                                f"goal_id '{qt.task.goal_id}', executing directly"
+                            )
+                            self.queue_manager.queue.mark_executing(qt)
+                            await self._execute_autonomous_task(qt)
+                            continue
 
                 if not goal:
                     # No active goals — ask Claude to suggest one based on context
