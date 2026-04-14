@@ -17,6 +17,8 @@ from .task_queue import QueueManager
 from .retry import get_retry_manager, RetryConfig, RetryStrategy, MaxRetriesExceeded
 from .memory import PersistentMemory
 from .token_tracker import TokenTracker
+from .hook_server import HookServer
+from .hook_config import inject_hooks, remove_hooks, get_hook_port
 
 
 logging.basicConfig(
@@ -42,6 +44,8 @@ class CCClawDaemon:
         self._task_checker_task: Optional[asyncio.Task] = None
         self._token_checker_task: Optional[asyncio.Task] = None
         self._autonomous_runner_task: Optional[asyncio.Task] = None
+        # Hook server for Claude Code harness integration
+        self.hook_server: Optional[HookServer] = None
         # New features
         self.memory: Optional[PersistentMemory] = None
         self.retry_manager = get_retry_manager()
@@ -125,6 +129,19 @@ class CCClawDaemon:
 
                 # Start token budget checker in background
                 self._token_checker_task = asyncio.create_task(self._token_checker())
+
+                # Start hook server for Claude Code harness integration
+                hook_port = get_hook_port()
+                self.hook_server = HookServer(port=hook_port)
+                self.hook_server.register_stop_handler(self._on_hook_stop)
+                self.hook_server.register_post_tool_use_handler(self._on_hook_post_tool_use)
+                await self.hook_server.start()
+
+                # Inject hooks into Claude Code settings.json so Claude calls back to us
+                if self.profile.is_onboarding_complete():
+                    inject_hooks(hook_port)
+                else:
+                    logger.info("Hooks will be injected after onboarding completes")
 
                 # If profile is already onboarded (daemon restart), restore queue from pending tasks
                 if self.profile.is_onboarding_complete():
@@ -357,6 +374,7 @@ class CCClawDaemon:
                 f"claude_task_{task.id[:8]}",
                 self.claude.execute,
                 task.description,
+                task_id=task.id,
                 config=retry_config,
                 circuit_breaker_name="claude_api"
             )
@@ -456,6 +474,77 @@ class CCClawDaemon:
                     logger.warning("Failed to send notification despite being connected")
             else:
                 logger.warning("Notification not sent: WebSocket still disconnected after waiting")
+
+    # -------------------------------------------------------------------------
+    # Claude Code hook handlers
+    # -------------------------------------------------------------------------
+
+    async def _on_hook_stop(self, task_id: Optional[str], payload: dict):
+        """Handle Stop hook callback from Claude Code.
+
+        Called when Claude finishes responding. We use this to update
+        task status without waiting for the subprocess to exit.
+        """
+        if not task_id:
+            logger.warning("Stop hook received without task_id")
+            return
+
+        summary = payload.get("summary", "")
+        session_id = payload.get("session_id", "")
+        transcript_path = payload.get("transcript_path", "")
+
+        logger.info(f"[HOOK:Stop] task_id={task_id}, session_id={session_id}")
+
+        # Find the task in profile
+        task = None
+        for t in self.profile.tasks:
+            if t.id == task_id:
+                task = t
+                break
+
+        if not task:
+            logger.warning(f"Stop hook for unknown task_id: {task_id}")
+            return
+
+        # Only update if task is still executing (not already completed by runner)
+        from .profile import TaskStatus
+        if task.status == TaskStatus.EXECUTING:
+            self.profile.complete_task(task_id, result_summary=summary[:200])
+            logger.info(f"[HOOK:Stop] task {task_id} marked complete via hook: {summary[:50]}")
+
+            # Notify via WebSocket if connected
+            if self.ws_manager and self.ws_manager.is_connected:
+                goal = None
+                for g in self.profile.goals:
+                    if g.id == task.goal_id:
+                        goal = g
+                        break
+                total = len(self.profile.get_tasks_for_goal(task.goal_id))
+                completed = len([t for t in self.profile.get_tasks_for_goal(task.goal_id)
+                                 if t.status == TaskStatus.COMPLETED])
+                msg = f"✅ Task done [{completed}/{total}]\n📋 {task.description}\n📤 {summary[:100]}"
+                await self.ws_manager.send_notification(msg)
+        else:
+            logger.info(f"[HOOK:Stop] task {task_id} already status={task.status.value}, ignoring")
+
+    async def _on_hook_post_tool_use(self, task_id: Optional[str], payload: dict):
+        """Handle PostToolUse hook callback from Claude Code.
+
+        Fires after every tool call succeeds. Can be used for real-time
+        progress tracking or to intercept results.
+        """
+        if not task_id:
+            return
+
+        tool_name = payload.get("tool_name", "")
+        logger.debug(f"[HOOK:PostToolUse] task_id={task_id}, tool={tool_name}")
+
+        # Future: could update a "last tool used" field for progress tracking,
+        # or check if a dangerous tool was called and alert the user.
+
+    # -------------------------------------------------------------------------
+    # Goal suggestion
+    # -------------------------------------------------------------------------
 
     async def _suggest_new_goal(self) -> Optional[str]:
         """Ask Claude to suggest a new goal based on user's context and current situation"""
@@ -576,6 +665,11 @@ No markdown, no explanation, just the JSON object."""
 
         if self._autonomous_runner_task:
             self._autonomous_runner_task.cancel()
+
+        # Stop hook server and remove hooks from settings.json
+        if self.hook_server and self.hook_server.is_running:
+            await self.hook_server.stop()
+        remove_hooks()
 
         if self.ws_manager:
             await self.ws_manager.disconnect()

@@ -19,7 +19,7 @@ class ClaudeExecutor:
     def __init__(self, config: ClientConfig):
         self.config = config
 
-    def _build_env(self) -> dict:
+    def _build_env(self, task_id: str = None) -> dict:
         """Build clean environment for Claude"""
         env = os.environ.copy()
         # Remove ALL Claude-related environment variables
@@ -28,9 +28,12 @@ class ClaudeExecutor:
                 env.pop(key, None)
         # Allow running as root with --dangerously-skip-permissions
         env["IS_SANDBOX"] = "1"
+        # Pass task_id to hook URL via env var (Claude Code resolves $CC_CLAW_TASK_ID in hook URLs)
+        if task_id:
+            env["CC_CLAW_TASK_ID"] = task_id
         return env
 
-    async def execute(self, prompt: str) -> Tuple[str, List[str], dict]:
+    async def execute(self, prompt: str, task_id: str = None) -> Tuple[str, List[str], dict]:
         """Execute a prompt using --print mode with JSON output
         Returns: (text_response, list_of_image_paths, raw_json_data)
         raw_json_data contains the full parsed JSON including 'usage' field for token tracking
@@ -64,7 +67,7 @@ class ClaudeExecutor:
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                env=self._build_env(),
+                env=self._build_env(task_id=task_id),
                 cwd=work_dir,
             )
 
