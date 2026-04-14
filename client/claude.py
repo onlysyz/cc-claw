@@ -167,7 +167,7 @@ class ClaudeExecutor:
             # Check if it's an image file
             if filename.endswith(('.png', '.jpg', '.jpeg', '.gif', '.webp')):
                 # Try to find it on Desktop, working_dir, or in common locations
-                for base in [os.path.expanduser("~/Desktop"), work_dir, os.getcwd()]:
+                for base in [os.path.expanduser("~/Desktop"), self.config.working_dir, os.getcwd()]:
                     full_path = os.path.join(base, filename)
                     if os.path.isfile(full_path):
                         paths.append(full_path)

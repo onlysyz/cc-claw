@@ -16,6 +16,7 @@ from .goal_engine import GoalEngine
 from .task_queue import QueueManager
 from .retry import get_retry_manager, RetryConfig, RetryStrategy, MaxRetriesExceeded
 from .memory import PersistentMemory
+from .token_tracker import TokenTracker
 
 
 logging.basicConfig(
@@ -376,7 +377,6 @@ class CCClawDaemon:
                 return
 
             # Parse token usage from raw JSON data
-            from .token_tracker import TokenTracker
             tracker = TokenTracker()
             if raw_data and 'usage' in raw_data:
                 usage = tracker._build_usage(raw_data['usage'])
