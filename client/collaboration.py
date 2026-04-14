@@ -17,6 +17,25 @@ from typing import Optional, List, Dict, Any, Callable
 logger = logging.getLogger(__name__)
 
 
+def _serialize_dataclass(obj: Any) -> Dict[str, Any]:
+    """Convert a dataclass to a JSON-serializable dict, handling enum values."""
+    result = {}
+    for k, v in obj.__dict__.items():
+        if isinstance(v, Enum):
+            result[k] = v.value
+        elif isinstance(v, list):
+            result[k] = [
+                _serialize_dataclass(item) if hasattr(item, '__dict__') else
+                item.value if isinstance(item, Enum) else item
+                for item in v
+            ]
+        elif hasattr(v, '__dict__'):
+            result[k] = _serialize_dataclass(v)  # pragma: no cover — no nested dataclass fields exist
+        else:
+            result[k] = v
+    return result
+
+
 class AgentRole(Enum):
     """Roles for collaborative agents"""
     COORDINATOR = "coordinator"      # Orchestrates overall goal
@@ -127,11 +146,11 @@ class MultiAgentCollaboration:
         try:
             # Save tasks
             with open(self.tasks_file, 'w') as f:
-                json.dump({k: v.__dict__ for k, v in self.tasks.items()}, f, indent=2)
+                json.dump({k: _serialize_dataclass(v) for k, v in self.tasks.items()}, f, indent=2)
 
             # Save agents
             with open(self.agents_file, 'w') as f:
-                json.dump({k: v.__dict__ for k, v in self.agents.items()}, f, indent=2)
+                json.dump({k: _serialize_dataclass(v) for k, v in self.agents.items()}, f, indent=2)
 
             # Save shared knowledge
             with open(self.shared_kb_file, 'w') as f:
@@ -164,17 +183,21 @@ class MultiAgentCollaboration:
         logger.info(f"Registered agent: {name} ({role.value})")
         return agent
 
-    def unregister_agent(self, agent_id: str):
-        """Remove an agent from collaboration"""
-        if agent_id in self.agents and agent_id != "main":
-            del self.agents[agent_id]
-            # Reassign their tasks
-            for task in self.tasks.values():
-                if task.assigned_to == agent_id:
-                    task.status = TaskStatus.PENDING
-                    task.assigned_to = None
-            self._save()
-            logger.info(f"Unregistered agent: {agent_id}")
+    def unregister_agent(self, agent_id: str) -> bool:
+        """Remove an agent from collaboration. Returns True if removed, False otherwise."""
+        if agent_id not in self.agents:
+            return False
+        if agent_id == "main":
+            return False
+        del self.agents[agent_id]
+        # Reassign their tasks
+        for task in self.tasks.values():
+            if task.assigned_to == agent_id:
+                task.status = TaskStatus.PENDING
+                task.assigned_to = None
+        self._save()
+        logger.info(f"Unregistered agent: {agent_id}")
+        return True
 
     def create_task(
         self,
@@ -423,7 +446,7 @@ class MultiAgentCollaboration:
         goal_tasks = [t for t in self.tasks.values() if t.goal_id == goal_id]
 
         if not goal_tasks:
-            return {"status": "no_tasks", "goal_id": goal_id}
+            return {"status": "no_tasks", "goal_id": goal_id, "progress_percent": 0}
 
         total = len(goal_tasks)
         completed = len([t for t in goal_tasks if t.status == TaskStatus.COMPLETED])

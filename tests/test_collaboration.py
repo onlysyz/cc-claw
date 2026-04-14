@@ -91,6 +91,14 @@ class TestCollaborationTask:
 # ---------------------------------------------------------------------------
 
 class TestCollaborationInit:
+    def test_init_with_explicit_dir(self, tmp_path):
+        """MultiAgentCollaboration.__init__ with explicit collab dir (lines 79-84, 94-95)."""
+        collab_dir = tmp_path / "collab"
+        mc = MultiAgentCollaboration(collaboration_dir=str(collab_dir))
+        assert mc.collaboration_dir == collab_dir
+        assert collab_dir.exists()
+        assert "main" in mc.agents
+
     def test_main_agent_registered_on_init(self, tmp_path):
         mc = make_collab(tmp_path)
         assert "main" in mc.agents
@@ -387,3 +395,150 @@ class TestCollaborationGenerateReport:
         assert "specialist" in report  # role.value is lowercase
         # total=1, completed=0 (task is ASSIGNED, not COMPLETED)
         assert "0/1" in report
+
+    def test_report_includes_shared_knowledge(self, tmp_path):
+        """generate_report shows shared knowledge section (lines 475-479)."""
+        mc = make_collab(tmp_path)
+        mc.create_task("Task", goal_id="g1")  # need a task so workflow_status doesn't early-return
+        mc.share_knowledge("api_spec", {"endpoints": ["/users"]})
+        mc.share_knowledge("db_schema", {"tables": ["users"]})
+        report = mc.generate_report("g1")
+        assert "Shared Knowledge" in report
+        assert "api_spec" in report
+
+
+class TestCollaborationErrorHandling:
+    """Exception-handling branches in MultiAgentCollaboration."""
+
+    def test_load_handles_corrupt_tasks_file(self, tmp_path):
+        """Corrupt tasks.json triggers exception handler in _load (lines 105-106)."""
+        fake_home = type("FH", (), {"__truediv__": lambda s, o: tmp_path / o})()
+        with patch("client.collaboration.Path.home", lambda cls=None: fake_home):
+            mc = MultiAgentCollaboration()
+            # Write corrupt JSON to the real tasks file path (under Path.home())
+            mc.tasks_file.write_text("not valid json{{{")
+            mc._load()
+            assert mc.tasks == {}
+
+    def test_load_handles_corrupt_agents_file(self, tmp_path):
+        """Corrupt agents.json triggers exception handler in _load (lines 114-115)."""
+        fake_home = type("FH", (), {"__truediv__": lambda s, o: tmp_path / o})()
+        with patch("client.collaboration.Path.home", lambda cls=None: fake_home):
+            mc = MultiAgentCollaboration()
+            mc.agents_file.write_text("also corrupt")
+            mc._load()
+            assert "main" in mc.agents  # unchanged
+
+    def test_load_handles_corrupt_shared_knowledge(self, tmp_path):
+        """Corrupt shared_knowledge.json triggers exception handler in _load (lines 122-123)."""
+        fake_home = type("FH", (), {"__truediv__": lambda s, o: tmp_path / o})()
+        with patch("client.collaboration.Path.home", lambda cls=None: fake_home):
+            mc = MultiAgentCollaboration()
+            mc.shared_kb_file.write_text("{invalid")
+            mc._load()
+            assert mc.shared_knowledge == {}
+
+    def test_update_task_status_unknown_task_id_early_return(self, tmp_path):
+        """update_task_status with unknown task_id returns early (line 235)."""
+        mc = make_collab(tmp_path)
+        # Should not raise
+        mc.update_task_status("nonexistent-id", TaskStatus.COMPLETED)
+        assert "nonexistent-id" not in mc.tasks
+
+    def test_unregister_nonexistent_agent_returns_false(self, tmp_path):
+        """unregister_agent with unknown id returns False (line 170)."""
+        mc = make_collab(tmp_path)
+        result = mc.unregister_agent("totally-real-agent-id")
+        assert result is False
+        assert "totally-real-agent-id" not in mc.agents
+
+    def test_get_ready_tasks_skips_agent_mismatch(self, tmp_path):
+        """Capability mismatch causes task to be skipped (line 306)."""
+        mc = make_collab(tmp_path)
+        agent = mc.register_agent("Py", AgentRole.WORKER, ["rust"])
+        # Task has nothing to do with "rust"
+        task = mc.create_task("Python script task", goal_id="g1")
+        ready = mc.get_ready_tasks(agent_id=agent.id)
+        ids = [t.id for t in ready]
+        assert task.id not in ids
+
+    def test_emit_handles_handler_exception(self, tmp_path):
+        """Exception in an event handler is caught and logged (lines 361-362)."""
+        mc = make_collab(tmp_path)
+        good_calls = []
+
+        def good_handler(data):
+            good_calls.append(data)
+
+        def bad_handler(data):
+            raise RuntimeError("handler failed")
+
+        mc.on("test_event", bad_handler)
+        mc.on("test_event", good_handler)
+        # Should not raise; bad_handler exception is caught
+        mc._emit("test_event", {"value": 42})
+        assert len(good_calls) == 1
+        assert good_calls[0] == {"value": 42}
+
+
+# ---------------------------------------------------------------------------
+# Full __init__ / _load / _save integration (real __init__, not make_collab)
+# ---------------------------------------------------------------------------
+
+class TestCollaborationFullInit:
+    """Test real __init__ paths bypassed by make_collab (lines 79-95, 100-123)."""
+
+    def test_init_with_dir_sets_file_paths(self, tmp_path):
+        """Lines 79-87: collaboration_dir provided → Path() + mkdir + file paths."""
+        mc = MultiAgentCollaboration(collaboration_dir=str(tmp_path))
+        assert mc.collaboration_dir == tmp_path
+        assert mc.tasks_file == tmp_path / "tasks.json"
+        assert mc.agents_file == tmp_path / "agents.json"
+        assert mc.shared_kb_file == tmp_path / "shared_knowledge.json"
+        # Main agent registered via _register_main_agent
+        assert "main" in mc.agents
+
+    def test_load_reads_existing_valid_tasks_and_agents(self, tmp_path):
+        """Lines 100-123: _load reads valid JSON from disk files on init."""
+        # Pre-write valid empty data files so _load succeeds on each branch
+        tasks_file = tmp_path / "tasks.json"
+        agents_file = tmp_path / "agents.json"
+        shared_file = tmp_path / "shared_knowledge.json"
+        tasks_file.write_text(json.dumps({}))
+        agents_file.write_text(json.dumps({}))
+        shared_file.write_text(json.dumps({}))
+        mc = MultiAgentCollaboration(collaboration_dir=str(tmp_path))
+        # _load ran; main agent still registered (via _register_main_agent)
+        assert "main" in mc.agents
+
+    def test_init_without_dir_uses_default_path(self, tmp_path):
+        """Line 82: no collaboration_dir → Path.home() / .config / cc-claw / collab."""
+        fake_home = type("FH", (), {"__truediv__": lambda s, o: tmp_path / o})()
+        with patch("client.collaboration.Path.home", lambda cls=None: fake_home):
+            mc = MultiAgentCollaboration()
+            assert ".config" in str(mc.collaboration_dir)
+
+    def test_save_handles_io_error(self, tmp_path):
+        """Lines 137-140: _save exception is caught when shared_knowledge write fails."""
+        mc = make_collab(tmp_path)
+        orig_open = open
+
+        def selective_open(path, mode="r", **kwargs):
+            """Succeed for tasks/agents files, fail for shared_kb_file."""
+            p = str(path)
+            if "shared_knowledge" in p and "w" in mode:
+                raise OSError("disk full")
+            return orig_open(path, mode, **kwargs)
+
+        with patch("builtins.open", side_effect=selective_open):
+            mc._save()  # must not raise — exception is caught at line 139
+
+    def test_save_succeeds_and_persists_data(self, tmp_path):
+        """Lines 137-138: _save completes all three writes without exception."""
+        mc = make_collab(tmp_path)
+        mc._save()  # all three writes succeed (empty dicts are JSON-serializable)
+        # Verify files were written
+        assert mc.tasks_file.exists()
+        assert mc.agents_file.exists()
+        assert mc.shared_kb_file.exists()
+

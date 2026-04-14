@@ -41,6 +41,29 @@ class TestPersistentMemoryInit:
         assert "_" in mem.current_session_id
         assert len(mem.current_session_id) == 15
 
+    def test_init_windows_path(self, temp_dir):
+        """On Windows (os.name == 'nt'), APPDATA path is used (lines 48-49)."""
+        fake_path = type("FakePath", (), {
+            "__truediv__": lambda self, other: temp_dir / other,
+            "__repr__": lambda self: str(temp_dir),
+        })()
+        with patch("client.memory.os.name", "nt"):
+            with patch.dict("client.memory.os.environ", {"APPDATA": str(temp_dir)}, clear=False):
+                with patch("client.memory.Path", return_value=fake_path):
+                    mem = PersistentMemory()
+                    assert "cc-claw" in str(mem.memory_dir)
+
+    def test_init_default_path_via_home(self, temp_dir):
+        """Default path uses Path.home() / .config / cc-claw / memory (line 51)."""
+        fake_home = type("FakeHome", (), {
+            "__truediv__": lambda self, other: temp_dir / other,
+            "__repr__": lambda self: str(temp_dir),
+        })()
+        with patch("client.memory.Path.home", return_value=fake_home):
+            mem = PersistentMemory()
+            assert ".config" in str(mem.memory_dir)
+            assert "cc-claw" in str(mem.memory_dir)
+
 
 class TestPersistentMemoryAdd:
     """Test adding memory entries."""
@@ -322,3 +345,84 @@ class TestConversationMemory:
 
         assert len(mem.history) == 0
         assert len(mem.metadata) == 0
+
+    def test_add_with_metadata(self, temp_dir):
+        """ConversationMemory.add() includes metadata dict in history entry."""
+        mem = ConversationMemory()
+        mem.add("user", "Hello", metadata={"source": "test"})
+        assert mem.history[-1]["metadata"] == {"source": "test"}
+
+    def test_add_trims_over_max_history(self, temp_dir):
+        """ConversationMemory trims history when it exceeds MAX_HISTORY."""
+        mem = ConversationMemory()
+        # MAX_HISTORY is 50; add well over that to hit line 301
+        for i in range(120):
+            mem.add_user(f"Message {i}")
+        assert len(mem.history) == mem.MAX_HISTORY
+        # After 120 adds with maxlen=50, history starts at entry 70
+        assert mem.history[0]["content"] == "Message 70"
+
+
+class TestPersistentMemoryErrorHandling:
+    """Error-handling branches in PersistentMemory I/O methods."""
+
+    def test_load_entries_handles_corrupt_file(self, temp_dir):
+        """Corrupt entries file triggers exception handler in _load_entries."""
+        mem = PersistentMemory(memory_dir=str(temp_dir))
+        # Write a corrupt line to the entries file
+        with open(mem.entries_file, "w") as f:
+            f.write("not valid json at all\n")
+        # Reload should swallow the error and reset entries
+        mem2 = PersistentMemory(memory_dir=str(temp_dir))
+        assert len(mem2.entries) == 0
+
+    def test_save_entries_handles_io_error(self, temp_dir):
+        """IOError during _save_entries is caught."""
+        mem = PersistentMemory(memory_dir=str(temp_dir))
+        mem.add("Entry 1")
+        with patch("builtins.open", side_effect=IOError("disk full")):
+            mem._save_entries()  # should not raise
+
+    def test_save_session_handles_io_error(self, temp_dir):
+        """IOError during _save_session is caught."""
+        mem = PersistentMemory(memory_dir=str(temp_dir))
+        with patch("builtins.open", side_effect=IOError("permission denied")):
+            mem._save_session()  # should not raise
+
+
+class TestPersistentMemoryGetContextForResumeDetail:
+    """Specific sections in get_context_for_resume formatting."""
+
+    def test_context_includes_resolved_issues(self, temp_dir):
+        """'Resolved Issues' section appears when entries have Error:/Solution:."""
+        mem = PersistentMemory(memory_dir=str(temp_dir))
+        mem.add(
+            "Error: Connection timeout. Solution: Increased timeout to 30s",
+            category="success",
+        )
+        context = mem.get_context_for_resume()
+        assert "### Resolved Issues" in context
+
+    def test_context_includes_important_learnings(self, temp_dir):
+        """'Important Learnings' section appears for high-importance learned entries."""
+        mem = PersistentMemory(memory_dir=str(temp_dir))
+        mem.add("Use fixtures properly", category="learned", importance=5)
+        mem.add("Medium importance", category="learned", importance=3)
+        context = mem.get_context_for_resume()
+        assert "### Important Learnings" in context
+        assert "Use fixtures properly" in context
+
+
+class TestPersistentMemoryInitDefaultPath:
+    """Test __init__ default-path branch (line 51: Path.home() path on non-Windows)."""
+
+    def test_init_without_memory_dir_uses_home_path(self, temp_dir):
+        """Line 51: when memory_dir not given and not Windows, Path.home() is used."""
+        # Create a fake home path that supports / operator
+        fake_home = type("FakeHome", (), {
+            "__truediv__": lambda self, other: temp_dir / other,
+            "__repr__": lambda self: f"FakeHome({temp_dir})",
+        })()
+        with patch("client.memory.Path.home", lambda cls=None: fake_home):
+            mem = PersistentMemory()
+            assert ".config" in str(mem.memory_dir)
