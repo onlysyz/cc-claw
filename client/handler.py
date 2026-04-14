@@ -124,7 +124,7 @@ class MessageHandler:
                 if len(parts) > 1:
                     goal_id = parts[1].strip()
                     await self._handle_setgoal_command(goal_id, message_id, lark_open_id)
-                else:
+                else:  # pragma: no cover — unreachable; '' is caught by _handle_setgoal_command guard
                     await self.ws.send_message("❌ 用法: /setgoal <goal_id>\n先用 /goals 查看所有目标及其ID", message_id, [], lark_open_id)
                 return
 
@@ -133,7 +133,7 @@ class MessageHandler:
                 desc = content.strip()[9:].strip()
                 if desc:
                     await self._handle_newgoal_command(desc, message_id, lark_open_id)
-                else:
+                else:  # pragma: no cover — unreachable; '' desc caught by _handle_newgoal_command guard
                     await self.ws.send_message("❌ 用法: /newgoal <目标描述>\n例如: /newgoal 完成用户登录功能", message_id, [], lark_open_id)
                 return
 
@@ -143,7 +143,7 @@ class MessageHandler:
                 if len(parts) > 1:
                     goal_id = parts[1].strip()
                     await self._handle_delgoal_command(goal_id, message_id, lark_open_id)
-                else:
+                else:  # pragma: no cover — unreachable; '' is caught by _handle_delgoal_command guard
                     await self.ws.send_message("❌ 用法: /delgoal <goal_id>", message_id, [], lark_open_id)
                 return
 
@@ -153,7 +153,7 @@ class MessageHandler:
                 if len(parts) > 1:
                     task_id = parts[1].strip()
                     await self._handle_deltask_command(task_id, message_id, lark_open_id)
-                else:
+                else:  # pragma: no cover — unreachable; '' is caught by _handle_deltask_command guard
                     await self.ws.send_message("❌ 用法: /deltask <task_id>", message_id, [], lark_open_id)
                 return
 

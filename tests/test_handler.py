@@ -3534,3 +3534,70 @@ class TestExecuteFromToolsMonitor:
                 assert "Error executing tool" in result
                 assert "monitor" in result
 
+
+class TestHandleNewgoalEnqueueTasks:
+    """Lines 454-457: queue_manager.queue.enqueue() when tasks are returned."""
+
+    @pytest.mark.asyncio
+    async def test_newgoal_with_tasks_enqueues_via_queue_manager(self):
+        """Line 454-457: tasks returned by decompose_goal are enqueued."""
+        from client.handler import MessageHandler
+        from client.profile import Goal, GoalStatus
+        from client.task_queue import Task
+
+        handler = MessageHandler(MagicMock(), MagicMock(), MagicMock(), MagicMock(), MagicMock())
+        handler.ws.send_message = AsyncMock()
+
+        new_goal = Goal(id="goal-newq", description="New Goal", status=GoalStatus.ACTIVE)
+        handler.profile.add_goal = MagicMock(return_value=new_goal)
+
+        task1 = Task(id="tq1", description="Step 1", goal_id="goal-newq")
+        task2 = Task(id="tq2", description="Step 2", goal_id="goal-newq")
+        handler.goal_engine = MagicMock()
+        handler.goal_engine.decompose_goal = AsyncMock(return_value=[task1, task2])
+
+        # Set up queue_manager
+        handler.queue_manager = MagicMock()
+        handler.queue_manager.queue = MagicMock()
+
+        await handler._handle_newgoal_command("Build new feature", "msg-123", "user-456")
+
+        # Verify enqueue was called for each task
+        assert handler.queue_manager.queue.enqueue.call_count == 2
+        handler.queue_manager.queue.enqueue.assert_any_call(task1, user_initiated=False)
+        handler.queue_manager.queue.enqueue.assert_any_call(task2, user_initiated=False)
+
+
+class TestPriorityMessageNoActiveGoals:
+    """Lines 169-171: priority message with no active goals creates ad-hoc goal."""
+
+    @pytest.mark.asyncio
+    async def test_priority_message_no_active_goals_creates_adhoc_goal(self):
+        """Lines 169-171: is_priority=True, queue_manager set, but no active goals."""
+        from client.handler import MessageHandler
+
+        handler = MessageHandler(MagicMock(), MagicMock(), MagicMock(), MagicMock(), MagicMock())
+        handler.ws.send_ack = AsyncMock()
+        handler.ws.send_message = AsyncMock()
+        handler.conversation_memory = MagicMock()
+
+        # Set up queue_manager and no active goals
+        handler.queue_manager = MagicMock()
+        handler.queue_manager.add_user_task = MagicMock()
+        handler.profile.get_active_goals = MagicMock(return_value=[])  # no active goals
+        handler.profile.add_goal = MagicMock(return_value=MagicMock(id="adhoc-goal-id"))
+        handler.claude.execute = AsyncMock(return_value=("done", [], None))
+        handler.token_tracker._build_usage = MagicMock(return_value=None)
+        handler.token_tracker._detect_rate_limit = MagicMock(return_value=False)
+
+        msg = Message(
+            type="message",
+            data={"content": "Urgent task!", "lark_open_id": "u1", "priority": True},
+            message_id="msg-001",
+        )
+        await handler.handle_message(msg)
+
+        # ad-hoc goal was created from message content
+        handler.profile.add_goal.assert_called()
+        call_args = handler.profile.add_goal.call_args[0]
+        assert "Urgent task!" in call_args[0]

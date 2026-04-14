@@ -8,7 +8,7 @@ import smtplib
 import requests
 import socket
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, mock_open
 
 import pytest
 
@@ -180,6 +180,60 @@ class TestApiClient:
         call_args = mock_call.call_args
         auth_headers = call_args[0][2]
         assert auth_headers['Authorization'] == 'Bearer secret-token'
+
+    @patch('client.tools.ApiClient.call')
+    def test_call_with_auth_merges_custom_headers(self, mock_call):
+        """Line 171: auth_headers.update(headers) merges custom headers."""
+        mock_call.return_value = {'status': 200, 'data': {}, 'headers': {}}
+        ApiClient.call_with_auth(
+            "https://api.example.com",
+            token="secret-token",
+            method="GET",
+            headers={'X-Custom': 'value'}
+        )
+        call_args = mock_call.call_args
+        auth_headers = call_args[0][2]
+        assert auth_headers['Authorization'] == 'Bearer secret-token'
+        assert auth_headers['X-Custom'] == 'value'
+
+
+class TestSystemInfoLinuxSpecific:
+    """Lines 235-242, 247-249: Linux /proc/meminfo and /proc/loadavg."""
+
+    def test_memory_parses_proc_meminfo(self):
+        """SystemInfo.memory() reads and parses /proc/meminfo."""
+        fake_meminfo = "MemTotal:       16384000 kB\nMemFree:         8192000 kB\n"
+        with patch('builtins.open', mock_open(read_data=fake_meminfo)):
+            result = SystemInfo.memory()
+
+        assert 'MemTotal' in result
+        assert result['MemTotal'] == '16384000 kB'
+
+    def test_cpu_load_parses_proc_loadavg(self):
+        """SystemInfo.cpu_load() reads and parses /proc/loadavg."""
+        fake_loadavg = "1.50 1.20 1.10 3/1000 12345\n"
+        with patch('builtins.open', mock_open(read_data=fake_loadavg)):
+            result = SystemInfo.cpu_load()
+
+        assert result['1min'] == 1.50
+        assert result['5min'] == 1.20
+        assert result['15min'] == 1.10
+
+
+class TestGetTool:
+    """Line 828: get_tool() returns None for unknown names."""
+
+    def test_get_tool_returns_none_for_unknown_name(self):
+        """get_tool() returns None when name not in TOOLS."""
+        from client.tools import get_tool
+        result = get_tool('nonexistent-tool-xyz')
+        assert result is None
+
+    def test_get_tool_case_insensitive(self):
+        """get_tool() lowercases the name."""
+        from client.tools import get_tool
+        result = get_tool('FILE')
+        assert result is FileProcessor
 
 
 class TestProcessManager:
