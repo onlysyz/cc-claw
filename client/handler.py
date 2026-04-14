@@ -443,6 +443,11 @@ class MessageHandler:
         if self.goal_engine:
             tasks = await self.goal_engine.decompose_goal(goal.id)
             if tasks:
+                # Enqueue tasks so autonomous runner can pick them up
+                if self.queue_manager:
+                    for task in tasks:
+                        self.queue_manager.queue.enqueue(task, user_initiated=False)
+                    logger.info(f"Enqueued {len(tasks)} tasks for goal {goal.id}")
                 await self.ws.send_message(
                     f"✅ 已分解为 {len(tasks)} 个任务:\n" +
                     "\n".join(f"{i+1}. {t.description[:50]}" for i, t in enumerate(tasks[:10])),
