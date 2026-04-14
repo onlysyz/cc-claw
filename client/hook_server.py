@@ -46,6 +46,10 @@ class HookServer:
         """Register callback for PreToolUse hook events."""
         self._on_pre_tool_use = cb
 
+    def register_notification_handler(self, cb: HookCallback):
+        """Register callback for Notification hook events."""
+        self._on_notification = cb
+
     async def start(self):
         """Start the HTTP server."""
         if self._running:
@@ -167,6 +171,11 @@ class HookServer:
         elif path == "/hooks/pre-tool-use" or hook_event == "PreToolUse":
             if self._on_pre_tool_use:
                 await self._on_pre_tool_use(task_id, payload)
+            response_data = {"continue": True}
+
+        elif path == "/hooks/notification" or hook_event == "Notification":
+            if self._on_notification:
+                await self._on_notification(task_id, payload)
             response_data = {"continue": True}
 
         elif path == "/health":

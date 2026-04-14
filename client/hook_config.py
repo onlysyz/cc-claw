@@ -95,6 +95,14 @@ def inject_hooks(hook_port: Optional[int] = None) -> bool:
                 "allowedEnvVars": ["CC_CLAW_TASK_ID"],
             }
         ],
+        "Notification": [
+            {
+                "type": "http",
+                "url": f"{base_url}/hooks/notification?task_id=$CC_CLAW_TASK_ID",
+                "timeout": 10,
+                "allowedEnvVars": ["CC_CLAW_TASK_ID"],
+            }
+        ],
     }
 
     _backup_settings()
@@ -130,7 +138,10 @@ def remove_hooks() -> bool:
     settings = _load_settings()
     hooks = settings.get("hooks", {})
 
-    cc_claw_markers = ["/hooks/stop", "/hooks/post-tool-use", "/hooks/pre-tool-use"]
+    cc_claw_markers = [
+        "/hooks/stop", "/hooks/post-tool-use",
+        "/hooks/pre-tool-use", "/hooks/notification",
+    ]
     changed = False
 
     for event_name in list(hooks.keys()):
@@ -162,7 +173,10 @@ def is_hooks_injected() -> bool:
     """Check whether cc-claw hooks are currently registered."""
     settings = _load_settings()
     hooks = settings.get("hooks", {})
-    cc_claw_markers = ["/hooks/stop", "/hooks/post-tool-use", "/hooks/pre-tool-use"]
+    cc_claw_markers = [
+        "/hooks/stop", "/hooks/post-tool-use",
+        "/hooks/pre-tool-use", "/hooks/notification",
+    ]
     for event_hooks in hooks.values():
         for h in event_hooks:
             if any(marker in h.get("url", "") for marker in cc_claw_markers):

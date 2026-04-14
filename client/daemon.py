@@ -135,6 +135,7 @@ class CCClawDaemon:
                 self.hook_server = HookServer(port=hook_port)
                 self.hook_server.register_stop_handler(self._on_hook_stop)
                 self.hook_server.register_post_tool_use_handler(self._on_hook_post_tool_use)
+                self.hook_server.register_notification_handler(self._on_hook_notification)
                 await self.hook_server.start()
 
                 # Inject hooks into Claude Code settings.json so Claude calls back to us
@@ -528,19 +529,124 @@ class CCClawDaemon:
             logger.info(f"[HOOK:Stop] task {task_id} already status={task.status.value}, ignoring")
 
     async def _on_hook_post_tool_use(self, task_id: Optional[str], payload: dict):
-        """Handle PostToolUse hook callback from Claude Code.
+        """Handle PostToolUse hook callback — fires after every tool call succeeds.
 
-        Fires after every tool call succeeds. Can be used for real-time
-        progress tracking or to intercept results.
+        Used for real-time progress tracking. Sends a brief notification via
+        WebSocket so the user can see what's happening during a long task.
         """
         if not task_id:
             return
 
         tool_name = payload.get("tool_name", "")
-        logger.debug(f"[HOOK:PostToolUse] task_id={task_id}, tool={tool_name}")
+        tool_input = payload.get("tool_input", {})
+        tool_response = payload.get("tool_response", {})
 
-        # Future: could update a "last tool used" field for progress tracking,
-        # or check if a dangerous tool was called and alert the user.
+        logger.info(f"[HOOK:PostToolUse] task_id={task_id}, tool={tool_name}")
+
+        # Build a concise progress message
+        msg = self._build_progress_message(tool_name, tool_input, tool_response)
+        if not msg:
+            return
+
+        # Look up the task to include its description
+        task_desc = ""
+        for t in self.profile.tasks:
+            if t.id == task_id:
+                task_desc = t.description[:40]
+                break
+
+        notification = f"🔧 {msg}"
+        if task_desc:
+            notification = f"🔧 [{task_desc}] {msg}"
+
+        # Send real-time update to user via WebSocket
+        if self.ws_manager and self.ws_manager.is_connected:
+            await self.ws_manager.send_notification(notification)
+
+    def _build_progress_message(self, tool_name: str, tool_input: dict, tool_response: dict) -> str:
+        """Build a human-readable progress message from a tool call result."""
+        import os
+
+        if tool_name == "Bash":
+            cmd = tool_input.get("command", "")
+            if len(cmd) > 60:
+                cmd = cmd[:57] + "..."
+            return f"Ran: {cmd}"
+
+        elif tool_name == "Write":
+            path = tool_input.get("file_path", "")
+            if path:
+                path = os.path.basename(path)
+            return f"Wrote: {path}" if path else "Write"
+
+        elif tool_name == "Read":
+            path = tool_input.get("file_path", "")
+            if path:
+                path = os.path.basename(path)
+            return f"Read: {path}" if path else "Read"
+
+        elif tool_name == "Edit":
+            path = tool_input.get("file_path", "")
+            if path:
+                path = os.path.basename(path)
+            return f"Edited: {path}" if path else "Edit"
+
+        elif tool_name == "Glob":
+            pattern = tool_input.get("pattern", "")
+            return f"Glob: {pattern}"
+
+        elif tool_name == "Grep":
+            pattern = tool_input.get("pattern", "")
+            return f"Grep: {pattern[:40]}"
+
+        elif tool_name == "WebFetch":
+            url = tool_input.get("url", "")
+            return f"WebFetch: {url[:50]}"
+
+        elif tool_name == "Task":
+            return f"Task: {tool_input.get('description', '')[:40]}"
+
+        else:
+            return tool_name
+
+    async def _on_hook_notification(self, task_id: Optional[str], payload: dict):
+        """Handle Notification hook callback from Claude Code.
+
+        Fires for permission prompts, idle prompts, auth events, etc.
+        Forwards the notification message to the user so they can act on it.
+        """
+        title = payload.get("title", "")
+        message = payload.get("message", "")
+        notification_type = payload.get("notification_type", "")
+        session_id = payload.get("session_id", "")
+
+        logger.info(f"[HOOK:Notification] type={notification_type} title={title}")
+
+        # Build notification text
+        if title and message:
+            notification = f"🔔 {title}\n{message}"
+        elif message:
+            notification = f"🔔 {message}"
+        elif title:
+            notification = f"🔔 {title}"
+        else:
+            notification = f"🔔 [{notification_type}]"
+
+        # Attach task context if we have one
+        if task_id:
+            for t in self.profile.tasks:
+                if t.id == task_id:
+                    notification = f"[{t.description[:40]}]\n{notification}"
+                    break
+
+        # Forward to user
+        if self.ws_manager and self.ws_manager.is_connected:
+            await self.ws_manager.send_notification(notification)
+
+        # Permission prompts need user action — log prominently
+        if notification_type == "permission_prompt":
+            logger.info(f"[HOOK:Permission] {title}: {message}")
+
 
     # -------------------------------------------------------------------------
     # Goal suggestion
