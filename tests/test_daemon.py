@@ -179,6 +179,64 @@ class TestAutonomousRunner:
 
         daemon.profile.set_active_goal.assert_called_once_with("existing-goal")
 
+    @pytest.mark.asyncio
+    async def test_unmatched_goal_id_executes_directly_not_reenqueue(self):
+        """Regression: orphan tasks should execute via retry_manager, not re-enqueue forever.
+
+        The bug: tasks with goal_id not in profile were re-enqueued forever.
+        The fix: _autonomous_runner executes them directly via _execute_autonomous_task.
+
+        This test verifies that for an orphan task (goal_id not in profile.goals):
+        1. retry_manager.execute is called (not re-enqueued)
+        2. No enqueue calls are made
+        """
+        config = ClientConfig()
+        daemon = CCClawDaemon(config)
+
+        # Task whose goal_id does not match any profile goal
+        orphan_task = Task(id="orphan-task-001", description="Orphan task", goal_id="nonexistent-goal-id")
+        mock_qt = MagicMock()
+        mock_qt.task = orphan_task
+
+        daemon.profile = MagicMock()
+        daemon.profile.goals = []  # no matching goal
+        daemon.profile.get_tasks_for_goal = MagicMock(return_value=[orphan_task])
+        daemon.profile.complete_task = MagicMock()
+        daemon.profile.record_usage = MagicMock()
+
+        daemon.queue_manager = MagicMock()
+        daemon.queue_manager.queue = MagicMock()
+        daemon.queue_manager.queue.mark_done = MagicMock()
+
+        daemon.claude = MagicMock()
+        daemon.claude.execute = AsyncMock(return_value=("done", [], None))
+
+        daemon.ws_manager = MagicMock()
+        daemon.ws_manager.is_connected = True
+        daemon.ws_manager.send_notification = AsyncMock(return_value=True)
+
+        daemon.memory = MagicMock()
+
+        # retry_manager is the execution wrapper used by _execute_autonomous_task
+        daemon.retry_manager = MagicMock()
+        daemon.retry_manager.execute = AsyncMock(return_value=("done", [], None))
+
+        daemon.queue_manager.queue.enqueue = MagicMock()
+
+        # Call _execute_autonomous_task which uses retry_manager.execute
+        with patch('client.daemon.TokenTracker'):
+            await daemon._execute_autonomous_task(mock_qt)
+
+        # retry_manager.execute was called (actual execution, not re-enqueue)
+        daemon.retry_manager.execute.assert_called_once()
+        call_args = daemon.retry_manager.execute.call_args[0]
+        # First positional arg is the task description
+        assert call_args[1] == daemon.claude.execute
+        assert call_args[2] == "Orphan task"
+
+        # No enqueue calls were made (the bug would have caused re-enqueue)
+        daemon.queue_manager.queue.enqueue.assert_not_called()
+
 
 class TestExecuteAutonomousTask:
     """Test _execute_autonomous_task()."""

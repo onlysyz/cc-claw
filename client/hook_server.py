@@ -29,6 +29,7 @@ class HookServer:
         self._on_stop: Optional[HookCallback] = None
         self._on_post_tool_use: Optional[HookCallback] = None
         self._on_pre_tool_use: Optional[HookCallback] = None
+        self._on_notification: Optional[HookCallback] = None
 
     # -------------------------------------------------------------------------
     # Public API
@@ -191,7 +192,8 @@ class HookServer:
         if response_data:
             await self._write_response(writer, 200, json.dumps(response_data), content_type="application/json")
         else:
-            await self._write_response(writer, 200, "", content_type="application/json")
+            # Unreachable: all dispatch branches either return early or set response_data.
+            await self._write_response(writer, 200, "", content_type="application/json")  # pragma: no cover
 
     async def _write_response(
         self,
