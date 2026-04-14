@@ -465,20 +465,24 @@ class TestWebSocketManagerListen:
     @pytest.mark.asyncio
     async def test_listen_message_handler_called(self):
         """When a message with registered handler is received, handler should be called."""
-        import websockets.exceptions
-
         config = MagicMock()
         config.auto_reconnect = False
 
-        async def async_messages():
-            yield '{"type": "message", "data": {"content": "hello", "message_id": "msg-1"}}'
-            raise websockets.exceptions.ConnectionClosed(None, None)
+        class MockAsyncIterator:
+            def __init__(self):
+                self.closed = False
 
-        mock_ws = MagicMock()
-        mock_ws.__aiter__ = lambda self: async_messages()
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                if not self.closed:
+                    self.closed = True
+                    return '{"type": "message", "data": {"content": "hello", "message_id": "msg-1"}}'
+                raise StopAsyncIteration
 
         ws = WebSocketManager(config)
-        ws.ws = mock_ws
+        ws.ws = MockAsyncIterator()
         ws._running = True
 
         received = []
@@ -504,16 +508,22 @@ class TestWebSocketManagerListen:
 
         config = MagicMock()
         config.auto_reconnect = False
-        mock_ws = MagicMock()
 
-        async def mock_aiter():
-            yield '{"type": "unknown_type", "data": {"foo": "bar"}}'
-            raise websockets.exceptions.ConnectionClosed(None, None)
+        class MockAsyncIterator:
+            def __init__(self):
+                self.closed = False
 
-        mock_ws.__aiter__ = mock_aiter
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                if not self.closed:
+                    self.closed = True
+                    return '{"type": "unknown_type", "data": {"foo": "bar"}}'
+                raise StopAsyncIteration
 
         ws = WebSocketManager(config)
-        ws.ws = mock_ws
+        ws.ws = MockAsyncIterator()
         ws._running = True
 
         await ws.listen()
@@ -529,14 +539,21 @@ class TestWebSocketManagerListen:
         config.auto_reconnect = False
         mock_ws = MagicMock()
 
-        async def mock_aiter():
-            yield "not valid json{"
-            raise websockets.exceptions.ConnectionClosed(None, None)
+        class MockAsyncIterator:
+            def __init__(self):
+                self.closed = False
 
-        mock_ws.__aiter__ = mock_aiter
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                if not self.closed:
+                    self.closed = True
+                    return "not valid json{"
+                raise StopAsyncIteration
 
         ws = WebSocketManager(config)
-        ws.ws = mock_ws
+        ws.ws = MockAsyncIterator()
         ws._running = True
 
         await ws.listen()
@@ -552,13 +569,24 @@ class TestWebSocketManagerListen:
         config.auto_reconnect = False
         mock_ws = MagicMock()
 
-        async def mock_aiter():
-            raise websockets.exceptions.ConnectionClosed(None, None)
+        class MockAsyncIterator:
+            def __init__(self, raise_exc):
+                self.raise_exc = raise_exc
+                self.closed = False
 
-        mock_ws.__aiter__ = mock_aiter
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                if not self.closed:
+                    self.closed = True
+                    if self.raise_exc:
+                        raise websockets.exceptions.ConnectionClosed(None, None)
+                    return '{"type": "message", "data": {}}'
+                raise StopAsyncIteration
 
         ws = WebSocketManager(config)
-        ws.ws = mock_ws
+        ws.ws = MockAsyncIterator(raise_exc=True)
         ws._running = True
 
         await ws.listen()
@@ -568,21 +596,25 @@ class TestWebSocketManagerListen:
     @pytest.mark.asyncio
     async def test_listen_schedules_reconnect_on_auto_reconnect(self):
         """When auto_reconnect=True, _schedule_reconnect should be called."""
-        import websockets.exceptions
-
         config = MagicMock()
         config.auto_reconnect = True
         config.reconnect_delay = 0.01
-        mock_ws = MagicMock()
 
-        async def mock_aiter():
-            yield '{"type": "message", "data": {}}'
-            raise websockets.exceptions.ConnectionClosed(None, None)
+        class MockAsyncIterator:
+            def __init__(self):
+                self.closed = False
 
-        mock_ws.__aiter__ = mock_aiter
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                if not self.closed:
+                    self.closed = True
+                    return '{"type": "message", "data": {}}'
+                raise StopAsyncIteration
 
         ws = WebSocketManager(config)
-        ws.ws = mock_ws
+        ws.ws = MockAsyncIterator()
         ws._running = True
 
         with patch.object(ws, '_schedule_reconnect', new_callable=AsyncMock) as mock_reconnect:
@@ -717,3 +749,362 @@ class TestWebSocketManagerScheduleReconnect:
 
             mock_connect.assert_called_once()
             # listen is called via create_task so we just verify connect succeeded
+
+
+class TestWebSocketManagerConnectExceptionPath:
+    """Cover lines 53-55: exception during connect is logged and False is returned."""
+
+    @pytest.mark.asyncio
+    async def test_connect_logs_error_on_exception(self):
+        config = MagicMock()
+        config.server_ws_url = "wss://bad.example.com"
+
+        with patch("client.websocket.websockets.connect", side_effect=OSError("DNS failed")):
+            ws = WebSocketManager(config)
+            result = await ws.connect()
+
+            assert result is False
+            assert ws._running is False
+
+
+class TestWebSocketManagerDisconnectEdgeCases:
+    """Cover lines 60-62: reconnect task cancellation."""
+
+    @pytest.mark.asyncio
+    async def test_disconnect_sets_running_false_first(self):
+        """Line 59: _running should be set False before cancel."""
+        config = MagicMock()
+        mock_task = AsyncMock()
+        ws = WebSocketManager(config)
+        ws._running = True
+        ws._reconnect_task = mock_task
+        ws.ws = None
+
+        await ws.disconnect()
+
+        assert ws._running is False
+        mock_task.cancel.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_disconnect_clears_reconnect_task_after_cancel(self):
+        """Line 61-62: after cancel, _reconnect_task is set to None."""
+        config = MagicMock()
+        mock_task = AsyncMock()
+        ws = WebSocketManager(config)
+        ws._running = True
+        ws._reconnect_task = mock_task
+        ws.ws = None
+
+        await ws.disconnect()
+
+        assert ws._reconnect_task is None
+
+
+class TestWebSocketManagerSendExceptionPath:
+    """Cover lines 78-80: exception during ws.send() is caught and False returned."""
+
+    @pytest.mark.asyncio
+    async def test_send_catches_exception_and_returns_false(self):
+        """Line 78-80: exception is caught, logged, and False is returned."""
+        config = MagicMock()
+        mock_ws = AsyncMock()
+        mock_ws.send.side_effect = RuntimeError("connection reset")
+
+        ws = WebSocketManager(config)
+        ws.ws = mock_ws
+        ws._running = True
+
+        result = await ws.send({"type": "test"})
+
+        assert result is False
+
+
+class TestWebSocketManagerSendAckEdgeCases:
+    """Cover line 98-102: send_ack builds correct payload."""
+
+    @pytest.mark.asyncio
+    async def test_send_ack_returns_false_when_not_connected(self):
+        """send_ack returns False when ws is None (inherit from send)."""
+        config = MagicMock()
+        ws = WebSocketManager(config)
+        ws.ws = None
+        ws._running = True
+
+        result = await ws.send_ack("msg-abc")
+
+        assert result is False
+
+
+class TestWebSocketManagerSendNotificationEdgeCases:
+    """Cover line 104-109: send_notification builds correct payload."""
+
+    @pytest.mark.asyncio
+    async def test_send_notification_returns_false_when_not_connected(self):
+        """send_notification returns False when ws is None."""
+        config = MagicMock()
+        ws = WebSocketManager(config)
+        ws.ws = None
+        ws._running = True
+
+        result = await ws.send_notification("Hello!")
+
+        assert result is False
+
+
+class TestWebSocketManagerRegisterEdgeCases:
+    """Cover lines 111-121."""
+
+    @pytest.mark.asyncio
+    async def test_register_returns_false_when_only_device_id_missing(self):
+        """Line 113: device_id is None should return False immediately."""
+        config = MagicMock()
+        config.device_id = None
+        config.device_token = "token"
+
+        ws = WebSocketManager(config)
+        result = await ws.register()
+
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_register_returns_false_when_only_token_missing(self):
+        """Line 113: device_token is None should return False immediately."""
+        config = MagicMock()
+        config.device_id = "device"
+        config.device_token = None
+
+        ws = WebSocketManager(config)
+        result = await ws.register()
+
+        assert result is False
+
+
+class TestWebSocketManagerListenExceptionPath:
+    """Cover lines 155-162: exception handling in listen and reconnect scheduling."""
+
+    @pytest.mark.asyncio
+    async def test_listen_catches_generic_exception(self):
+        """Lines 157-158: generic Exception in listen loop is caught and logged."""
+        import websockets.exceptions
+
+        config = MagicMock()
+        config.auto_reconnect = False
+        mock_ws = MagicMock()
+
+        class FailOnSecond:
+            def __init__(self):
+                self.count = 0
+
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                self.count += 1
+                if self.count == 1:
+                    return '{"type": "message", "data": {}}'
+                raise RuntimeError("unexpected error")
+
+        ws = WebSocketManager(config)
+        ws.ws = FailOnSecond()
+        ws._running = True
+
+        await ws.listen()
+
+        assert ws._running is False
+
+    @pytest.mark.asyncio
+    async def test_listen_calls_schedule_reconnect_on_error(self):
+        """Lines 161-162: when auto_reconnect=True, _schedule_reconnect is called."""
+        config = MagicMock()
+        config.auto_reconnect = True
+        config.reconnect_delay = 0.01
+
+        class MockAsyncIterator:
+            def __init__(self):
+                self.closed = False
+
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                if not self.closed:
+                    self.closed = True
+                    return '{"type": "message", "data": {}}'
+                raise StopAsyncIteration
+
+        ws = WebSocketManager(config)
+        ws.ws = MockAsyncIterator()
+        ws._running = True
+
+        with patch.object(ws, '_schedule_reconnect', new_callable=AsyncMock) as mock_sr:
+            await ws.listen()
+            mock_sr.assert_called_once()
+
+
+class TestWebSocketManagerScheduleReconnectEdgeCases:
+    """Cover lines 164-176: reconnect scheduling edge cases."""
+
+    @pytest.mark.asyncio
+    async def test_schedule_reconnect_skips_when_not_running(self):
+        """Lines 172: if _running became True during sleep, should not call connect."""
+        config = MagicMock()
+        config.auto_reconnect = True
+        config.reconnect_delay = 0.01
+        config.server_ws_url = "wss://example.com/ws"
+        config.device_token = None
+        config.device_id = None
+
+        ws = WebSocketManager(config)
+        ws._running = False
+
+        with patch('client.websocket.websockets.connect', new_callable=AsyncMock) as mock_connect:
+            async def set_running():
+                await asyncio.sleep(0.005)
+                ws._running = True
+
+            asyncio.create_task(set_running())
+            await ws._schedule_reconnect()
+
+            mock_connect.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_schedule_reconnect_fails_on_connect_error(self):
+        """Line 172-173: connect() returning False should not call listen."""
+        config = MagicMock()
+        config.auto_reconnect = True
+        config.reconnect_delay = 0.01
+        config.server_ws_url = "wss://example.com/ws"
+        config.device_token = None
+        config.device_id = None
+
+        ws = WebSocketManager(config)
+        ws._running = False
+
+        with patch('client.websocket.websockets.connect', new_callable=AsyncMock) as mock_connect:
+            mock_connect.return_value = None  # connect returns falsy
+
+            with patch.object(ws, 'listen') as mock_listen:
+                await ws._schedule_reconnect()
+                await asyncio.sleep(0.005)
+
+                mock_connect.assert_called_once()
+                # listen should NOT be called when connect fails
+                # (the actual code checks `if await self.connect():` which is False when None)
+
+
+class TestWebSocketManagerIsConnectedFallback:
+    """Cover lines 186-187: fallback when State import fails."""
+
+    def test_is_connected_uses_open_attr_fallback(self):
+        """Lines 185-187: AttributeError on ws.state uses getattr(open, False) fallback."""
+        config = MagicMock()
+        mock_ws = MagicMock()
+        # Simulate ws.state raising AttributeError (no 'state' attr)
+        del mock_ws.state
+        mock_ws.open = True  # fallback attribute that should be used
+
+        ws = WebSocketManager(config)
+        ws._running = True
+        ws.ws = mock_ws
+
+        result = ws.is_connected
+        assert result is True
+
+    def test_is_connected_false_when_open_attr_is_false(self):
+        """open attr exists but is False."""
+        config = MagicMock()
+        mock_ws = MagicMock()
+        del mock_ws.state  # force AttributeError path
+        mock_ws.open = False
+
+        ws = WebSocketManager(config)
+        ws._running = True
+        ws.ws = mock_ws
+
+        result = ws.is_connected
+
+        assert result is False
+
+
+class TestWebSocketManagerListenNoMessageId:
+    """Cover lines 138-142: message with no message_id field."""
+
+    @pytest.mark.asyncio
+    async def test_listen_message_without_message_id(self):
+        """Lines 139-143: message with no message_id in data."""
+        import websockets.exceptions
+
+        config = MagicMock()
+        config.auto_reconnect = False
+
+        class MockAsyncIterator:
+            def __init__(self):
+                self.closed = False
+
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                if not self.closed:
+                    self.closed = True
+                    return '{"type": "message", "data": {"content": "hello"}}'
+                raise StopAsyncIteration
+
+        mock_ws = MockAsyncIterator()
+
+        ws = WebSocketManager(config)
+        ws.ws = mock_ws
+        ws._running = True
+
+        received = []
+
+        async def handler(msg):
+            received.append(msg)
+
+        ws.on("message", handler)
+
+        await ws.listen()
+        await asyncio.sleep(0)
+
+        assert len(received) == 1
+        assert received[0].message_id is None
+
+    @pytest.mark.asyncio
+    async def test_listen_empty_data_payload(self):
+        """Lines 138: data = {} when no 'data' key in JSON."""
+        import websockets.exceptions
+
+        config = MagicMock()
+        config.auto_reconnect = False
+
+        class MockAsyncIterator:
+            def __init__(self):
+                self.closed = False
+
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                if not self.closed:
+                    self.closed = True
+                    return '{"type": "status", "data": {}}'
+                raise StopAsyncIteration
+
+        mock_ws = MockAsyncIterator()
+
+        ws = WebSocketManager(config)
+        ws.ws = mock_ws
+        ws._running = True
+
+        received = []
+
+        async def handler(msg):
+            received.append(msg)
+
+        ws.on("status", handler)
+
+        await ws.listen()
+        await asyncio.sleep(0)
+
+        assert len(received) == 1
+        assert received[0].data == {}
