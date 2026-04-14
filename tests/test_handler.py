@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from client.handler import MessageHandler
 from client.websocket import Message
 from client.profile import Goal, Task, GoalStatus, TaskStatus
+from client.config import ClientConfig
 
 
 class TestHandlerInit:
@@ -1276,6 +1277,37 @@ class TestCommandEdgeCases:
         handler.ws.send_message.assert_called()
 
     @pytest.mark.asyncio
+    async def test_execute_tool_get_tool_returns_valid_calls_execute_from_tools(self):
+        """get_tool returns valid tool → _execute_from_tools is called (line 537)."""
+        from client.handler import ToolExecutor, get_tool
+        from client.tools import FileProcessor
+
+        config = ClientConfig()
+        executor = ToolExecutor(config)
+
+        # get_tool returns FileProcessor (truthy) → line 537 is hit
+        with patch("client.handler.get_tool", return_value=FileProcessor):
+            with patch.object(FileProcessor, "read", MagicMock(return_value="mocked file content")):
+                result = await executor.execute_tool("file", {"operation": "read", "path": "/tmp/test.txt"})
+
+        assert result == "mocked file content"
+
+    @pytest.mark.asyncio
+    async def test_execute_tool_get_tool_returns_none_falls_to_builtin(self):
+        """get_tool returns None → falls through to built-in tools."""
+        from client.handler import ToolExecutor
+
+        config = ClientConfig()
+        executor = ToolExecutor(config)
+
+        with patch("client.handler.get_tool", return_value=None):
+            # Tool "shell" is a built-in
+            with patch.object(executor, "_shell", AsyncMock(return_value="shell output")):
+                result = await executor.execute_tool("shell", {"command": "echo hi"})
+
+        assert result == "shell output"
+
+    @pytest.mark.asyncio
     async def test_delay_routes_via_handle_message(self):
         """Router hits /delay <min> <msg> → scheduler.add_task is called."""
         handler = MessageHandler(MagicMock(), MagicMock(), MagicMock(), MagicMock(), MagicMock())
@@ -2457,4 +2489,1048 @@ class TestToolExecutor:
             mock_shell.return_value = mock_proc
             result = await executor.execute_tool("shell", {"command": "echo hello"})
             assert "output" in result
+
+    # ---- _execute_from_tools file operations (lines 562-579) ----
+
+    @pytest.mark.asyncio
+    async def test_execute_from_tools_file_write(self):
+        """file operation=write → FileProcessor.write() (line 566)."""
+        from client.handler import ToolExecutor
+        from client.tools import FileProcessor
+
+        config = ClientConfig()
+        executor = ToolExecutor(config)
+
+        with patch("client.handler.get_tool", return_value=FileProcessor):
+            with patch.object(FileProcessor, "write", return_value=True):
+                result = await executor._execute_from_tools("file", {
+                    "operation": "write",
+                    "path": "/tmp/out.txt",
+                    "content": "hello world"
+                })
+                assert result == "True"
+
+    @pytest.mark.asyncio
+    async def test_execute_from_tools_file_append(self):
+        """file operation=append → FileProcessor.append() (line 568)."""
+        from client.handler import ToolExecutor
+        from client.tools import FileProcessor
+
+        config = ClientConfig()
+        executor = ToolExecutor(config)
+
+        with patch("client.handler.get_tool", return_value=FileProcessor):
+            with patch.object(FileProcessor, "append", return_value=15):
+                result = await executor._execute_from_tools("file", {
+                    "operation": "append",
+                    "path": "/tmp/log.txt",
+                    "content": "new line"
+                })
+                assert result == "15"
+
+    @pytest.mark.asyncio
+    async def test_execute_from_tools_file_find(self):
+        """file operation=find → FileProcessor.find() (line 570)."""
+        from client.handler import ToolExecutor
+        from client.tools import FileProcessor
+
+        config = ClientConfig()
+        executor = ToolExecutor(config)
+
+        found_files = ["src/a.py", "src/b.py"]
+        with patch("client.handler.get_tool", return_value=FileProcessor):
+            with patch.object(FileProcessor, "find", return_value=found_files):
+                result = await executor._execute_from_tools("file", {
+                    "operation": "find",
+                    "pattern": "*.py",
+                    "path": "src"
+                })
+                assert "src/a.py" in result
+                assert "src/b.py" in result
+
+    @pytest.mark.asyncio
+    async def test_execute_from_tools_file_find_no_matches(self):
+        """file operation=find returns empty → 'No matches found' (line 572)."""
+        from client.handler import ToolExecutor
+        from client.tools import FileProcessor
+
+        config = ClientConfig()
+        executor = ToolExecutor(config)
+
+        with patch("client.handler.get_tool", return_value=FileProcessor):
+            with patch.object(FileProcessor, "find", return_value=[]):
+                result = await executor._execute_from_tools("file", {
+                    "operation": "find",
+                    "pattern": "*.xyz",
+                    "path": "src"
+                })
+                assert result == "No matches found"
+
+    @pytest.mark.asyncio
+    async def test_execute_from_tools_file_count_lines(self):
+        """file operation=count_lines → FileProcessor.count_lines() (line 573)."""
+        from client.handler import ToolExecutor
+        from client.tools import FileProcessor
+
+        config = ClientConfig()
+        executor = ToolExecutor(config)
+
+        with patch("client.handler.get_tool", return_value=FileProcessor):
+            with patch.object(FileProcessor, "count_lines", return_value=42):
+                result = await executor._execute_from_tools("file", {
+                    "operation": "count_lines",
+                    "path": "/tmp/code.py"
+                })
+                assert result == "42"
+
+    @pytest.mark.asyncio
+    async def test_execute_from_tools_file_search(self):
+        """file operation=search → FileProcessor.search() (line 575)."""
+        from client.handler import ToolExecutor
+        from client.tools import FileProcessor
+
+        config = ClientConfig()
+        executor = ToolExecutor(config)
+
+        search_results = [
+            {"file": "a.py", "line": 10, "content": "def foo():"},
+            {"file": "b.py", "line": 5, "content": "def bar():"},
+        ]
+        with patch("client.handler.get_tool", return_value=FileProcessor):
+            with patch.object(FileProcessor, "search", return_value=search_results):
+                result = await executor._execute_from_tools("file", {
+                    "operation": "search",
+                    "pattern": "def ",
+                    "path": "src",
+                    "file_type": "*.py"
+                })
+                assert "a.py:10" in result
+                assert "b.py:5" in result
+
+    @pytest.mark.asyncio
+    async def test_execute_from_tools_file_search_no_results(self):
+        """file operation=search returns empty → 'No matches found' (line 578)."""
+        from client.handler import ToolExecutor
+        from client.tools import FileProcessor
+
+        config = ClientConfig()
+        executor = ToolExecutor(config)
+
+        with patch("client.handler.get_tool", return_value=FileProcessor):
+            with patch.object(FileProcessor, "search", return_value=[]):
+                result = await executor._execute_from_tools("file", {
+                    "operation": "search",
+                    "pattern": "NOTFOUND",
+                    "path": "src"
+                })
+                assert result == "No matches found"
+
+    # ---- _execute_from_tools scraper operations (lines 581-598) ----
+
+    @pytest.mark.asyncio
+    async def test_execute_from_tools_scraper_fetch_json(self):
+        """scraper method=fetch_json → DataScraper.fetch_json() (line 590)."""
+        from client.handler import ToolExecutor
+        from client.tools import DataScraper
+
+        config = ClientConfig()
+        executor = ToolExecutor(config)
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = {"key": "value"}
+
+        with patch("client.handler.get_tool", return_value=DataScraper):
+            with patch("client.tools.requests.get", return_value=mock_response):
+                result = await executor._execute_from_tools("scraper", {
+                    "method": "fetch_json",
+                    "url": "https://api.example.com/data"
+                })
+                assert "key" in result
+
+    @pytest.mark.asyncio
+    async def test_execute_from_tools_scraper_extract_links(self):
+        """scraper method=extract_links → DataScraper.extract_links() (line 592-594)."""
+        from client.handler import ToolExecutor
+        from client.tools import DataScraper
+
+        config = ClientConfig()
+        executor = ToolExecutor(config)
+
+        # method="extract_links" dispatches to extract_links branch
+        # It calls tool.extract_links(html, url) directly (no HTTP call)
+        with patch("client.handler.get_tool", return_value=DataScraper):
+            with patch("client.tools.DataScraper.extract_links", return_value=["https://example.com/1", "https://example.com/2"]):
+                result = await executor._execute_from_tools("scraper", {
+                    "method": "extract_links",
+                    "url": "https://example.com",
+                    "html": '<a href="/1"><a href="/2">'
+                })
+                assert "https://example.com/1" in result
+                assert "https://example.com/2" in result
+
+    @pytest.mark.asyncio
+    async def test_execute_from_tools_scraper_extract_emails(self):
+        """scraper method=extract_emails → DataScraper.extract_emails() (line 595-596)."""
+        from client.handler import ToolExecutor
+        from client.tools import DataScraper
+
+        config = ClientConfig()
+        executor = ToolExecutor(config)
+
+        # url is required by guard at line 583; extract_emails uses params.get("text")
+        with patch("client.handler.get_tool", return_value=DataScraper):
+            with patch("client.tools.DataScraper.extract_emails", return_value=["a@b.com", "c@d.com"]):
+                result = await executor._execute_from_tools("scraper", {
+                    "method": "extract_emails",
+                    "url": "https://example.com",
+                    "text": "Contact a@b.com or c@d.com"
+                })
+                assert "a@b.com" in result
+                assert "c@d.com" in result
+
+    @pytest.mark.asyncio
+    async def test_execute_from_tools_scraper_extract_ips(self):
+        """scraper method=extract_ips → DataScraper.extract_ips() (line 597-598)."""
+        from client.handler import ToolExecutor
+        from client.tools import DataScraper
+
+        config = ClientConfig()
+        executor = ToolExecutor(config)
+
+        with patch("client.handler.get_tool", return_value=DataScraper):
+            with patch("client.tools.DataScraper.extract_ips", return_value=["1.2.3.4", "5.6.7.8"]):
+                result = await executor._execute_from_tools("scraper", {
+                    "method": "extract_ips",
+                    "url": "https://example.com",
+                    "text": "Server 1.2.3.4 and 5.6.7.8"
+                })
+                assert "1.2.3.4" in result
+                assert "5.6.7.8" in result
+
+    @pytest.mark.asyncio
+    async def test_execute_from_tools_scraper_fetch_success(self):
+        """scraper method=fetch → DataScraper.fetch() (line 586-588)."""
+        from client.handler import ToolExecutor
+        from client.tools import DataScraper
+
+        config = ClientConfig()
+        executor = ToolExecutor(config)
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.text = "<html>Test</html>"
+        mock_response.url = "https://example.com"
+
+        with patch("client.handler.get_tool", return_value=DataScraper):
+            with patch("client.tools.requests.get", return_value=mock_response):
+                result = await executor._execute_from_tools("scraper", {
+                    "method": "fetch",
+                    "url": "https://example.com"
+                })
+                assert "Status: 200" in result
+                assert "https://example.com" in result
+
+    @pytest.mark.asyncio
+    async def test_execute_from_tools_scraper_url_required(self):
+        """scraper fetch without url → 'URL required' (line 583-584)."""
+        from client.handler import ToolExecutor
+        from client.tools import DataScraper
+
+        config = ClientConfig()
+        executor = ToolExecutor(config)
+
+        with patch("client.handler.get_tool", return_value=DataScraper):
+            result = await executor._execute_from_tools("scraper", {
+                "method": "fetch",
+                "url": ""
+            })
+            assert "URL required" in result
+
+    # ---- _execute_from_tools code_analysis operations (lines 728-746) ----
+
+    @pytest.mark.asyncio
+    async def test_execute_from_tools_code_analysis_count_lines(self):
+        """code_analysis operation=count_lines → CodeAnalysisTool.count_lines() (line 730-734)."""
+        from client.handler import ToolExecutor
+        from client.tools import CodeAnalysisTool
+
+        config = ClientConfig()
+        executor = ToolExecutor(config)
+
+        with patch("client.handler.get_tool", return_value=CodeAnalysisTool):
+            with patch("client.tools.CodeAnalysisTool.count_lines", return_value={"total": 100, "by_language": {"py": 80, "js": 20}}):
+                result = await executor._execute_from_tools("code_analysis", {
+                    "operation": "count_lines",
+                    "path": "src"
+                })
+                assert "total" in result
+
+    @pytest.mark.asyncio
+    async def test_execute_from_tools_code_analysis_find_functions(self):
+        """code_analysis operation=find_functions → CodeAnalysisTool.find_functions() (line 735-739)."""
+        from client.handler import ToolExecutor
+        from client.tools import CodeAnalysisTool
+
+        config = ClientConfig()
+        executor = ToolExecutor(config)
+
+        with patch("client.handler.get_tool", return_value=CodeAnalysisTool):
+            with patch("client.tools.CodeAnalysisTool.find_functions", return_value=[{"file": "a.py", "line": 10, "name": "foo", "params": "x"}]):
+                result = await executor._execute_from_tools("code_analysis", {
+                    "operation": "find_functions",
+                    "path": "src"
+                })
+                assert "foo" in result
+
+    @pytest.mark.asyncio
+    async def test_execute_from_tools_code_analysis_complexity(self):
+        """code_analysis operation=complexity → CodeAnalysisTool.complexity() (line 740-744)."""
+        from client.handler import ToolExecutor
+        from client.tools import CodeAnalysisTool
+
+        config = ClientConfig()
+        executor = ToolExecutor(config)
+
+        with patch("client.handler.get_tool", return_value=CodeAnalysisTool):
+            with patch("client.tools.CodeAnalysisTool.complexity", return_value={"total_complexity": 50, "files_analyzed": 5, "avg_complexity": 10.0}):
+                result = await executor._execute_from_tools("code_analysis", {
+                    "operation": "complexity",
+                    "path": "src"
+                })
+                assert "total_complexity" in result
+
+    @pytest.mark.asyncio
+    async def test_execute_from_tools_code_analysis_dependencies(self):
+        """code_analysis operation=dependencies → CodeAnalysisTool.dependencies() (line 745-746)."""
+        from client.handler import ToolExecutor
+        from client.tools import CodeAnalysisTool
+
+        config = ClientConfig()
+        executor = ToolExecutor(config)
+
+        with patch("client.handler.get_tool", return_value=CodeAnalysisTool):
+            with patch("client.tools.CodeAnalysisTool.dependencies", return_value={"dependencies": {"requests": 5, "numpy": 2}, "total_unique": 2}):
+                result = await executor._execute_from_tools("code_analysis", {
+                    "operation": "dependencies",
+                    "path": "src"
+                })
+                assert "dependencies" in result
+
+    # ---- _execute_from_tools system operations (lines 621-628) ----
+
+    @pytest.mark.asyncio
+    async def test_execute_from_tools_system_disk_usage(self):
+        """system operation=disk_usage → SystemInfo.disk_usage() (line 623-624)."""
+        from client.handler import ToolExecutor
+        from client.tools import SystemInfo
+
+        config = ClientConfig()
+        executor = ToolExecutor(config)
+
+        with patch("client.handler.get_tool", return_value=SystemInfo):
+            with patch("client.tools.SystemInfo.disk_usage", return_value={"total": 100, "used": 50, "free": 50, "percent": 50.0}):
+                result = await executor._execute_from_tools("system", {
+                    "operation": "disk_usage",
+                    "path": "/"
+                })
+                assert "total" in result
+
+    @pytest.mark.asyncio
+    async def test_execute_from_tools_system_memory(self):
+        """system operation=memory → SystemInfo.memory() (line 625-626)."""
+        from client.handler import ToolExecutor
+        from client.tools import SystemInfo
+
+        config = ClientConfig()
+        executor = ToolExecutor(config)
+
+        with patch("client.handler.get_tool", return_value=SystemInfo):
+            with patch("client.tools.SystemInfo.memory", return_value={"MemTotal": "1000 kB", "MemAvailable": "500 kB"}):
+                result = await executor._execute_from_tools("system", {
+                    "operation": "memory"
+                })
+                assert "MemTotal" in result
+
+    @pytest.mark.asyncio
+    async def test_execute_from_tools_system_cpu_load(self):
+        """system operation=cpu_load → SystemInfo.cpu_load() (line 627-628)."""
+        from client.handler import ToolExecutor
+        from client.tools import SystemInfo
+
+        config = ClientConfig()
+        executor = ToolExecutor(config)
+
+        with patch("client.handler.get_tool", return_value=SystemInfo):
+            with patch("client.tools.SystemInfo.cpu_load", return_value={"1min": 0.5, "5min": 0.3, "15min": 0.1}):
+                result = await executor._execute_from_tools("system", {
+                    "operation": "cpu_load"
+                })
+                assert "1min" in result
+
+
+# ---- _execute_from_tools api/process/git/docker/database/image/notification/monitor operations ----
+
+class TestExecuteFromToolsApi:
+    """Test api tool execution (line 601)."""
+
+    @pytest.mark.asyncio
+    async def test_execute_from_tools_api_call(self):
+        """api tool → ApiClient.call() is called (line 601)."""
+        from client.handler import ToolExecutor
+        from client.tools import ApiClient
+
+        config = ClientConfig()
+        executor = ToolExecutor(config)
+
+        mock_response = {"status": 200, "data": {"key": "value"}, "headers": {}}
+        with patch("client.handler.get_tool", return_value=ApiClient):
+            with patch("client.tools.ApiClient.call", return_value=mock_response):
+                result = await executor._execute_from_tools("api", {
+                    "url": "https://example.com",
+                    "method": "GET"
+                })
+                assert "status" in result
+
+
+class TestExecuteFromToolsProcess:
+    """Test process tool execution (lines 611-619)."""
+
+    @pytest.mark.asyncio
+    async def test_execute_from_tools_process_kill(self):
+        """process operation=kill → ProcessManager.kill() (line 612)."""
+        from client.handler import ToolExecutor
+        from client.tools import ProcessManager
+
+        config = ClientConfig()
+        executor = ToolExecutor(config)
+
+        with patch("client.handler.get_tool", return_value=ProcessManager):
+            with patch.object(ProcessManager, "kill", return_value=True):
+                result = await executor._execute_from_tools("process", {
+                    "operation": "kill",
+                    "pid": 1234,
+                    "signal": 9
+                })
+                assert "True" in result
+
+    @pytest.mark.asyncio
+    async def test_execute_from_tools_process_is_running(self):
+        """process operation=is_running → ProcessManager.is_running() (line 614)."""
+        from client.handler import ToolExecutor
+        from client.tools import ProcessManager
+
+        config = ClientConfig()
+        executor = ToolExecutor(config)
+
+        with patch("client.handler.get_tool", return_value=ProcessManager):
+            with patch.object(ProcessManager, "is_running", return_value=True):
+                result = await executor._execute_from_tools("process", {
+                    "operation": "is_running",
+                    "pattern": "python"
+                })
+                assert "True" in result
+
+    @pytest.mark.asyncio
+    async def test_execute_from_tools_process_list_empty(self):
+        """process operation=list returns empty → 'No processes found' (line 618)."""
+        from client.handler import ToolExecutor
+        from client.tools import ProcessManager
+
+        config = ClientConfig()
+        executor = ToolExecutor(config)
+
+        with patch("client.handler.get_tool", return_value=ProcessManager):
+            with patch.object(ProcessManager, "list", return_value=[]):
+                result = await executor._execute_from_tools("process", {
+                    "operation": "list",
+                    "pattern": "NOTFOUND"
+                })
+                assert result == "No processes found"
+
+    @pytest.mark.asyncio
+    async def test_execute_from_tools_process_list_with_results(self):
+        """process operation=list returns processes → returns formatted list (line 619)."""
+        from client.handler import ToolExecutor
+        from client.tools import ProcessManager
+
+        config = ClientConfig()
+        executor = ToolExecutor(config)
+
+        processes = [
+            {"pid": 1234, "command": "python test.py"},
+            {"pid": 5678, "command": "node server.js"}
+        ]
+        with patch("client.handler.get_tool", return_value=ProcessManager):
+            with patch.object(ProcessManager, "list", return_value=processes):
+                result = await executor._execute_from_tools("process", {
+                    "operation": "list",
+                    "pattern": ""
+                })
+                assert "PID 1234" in result
+                assert "python test.py" in result
+                assert "PID 5678" in result
+
+
+class TestExecuteFromToolsGit:
+    """Test git tool execution (lines 631-640)."""
+
+    @pytest.mark.asyncio
+    async def test_execute_from_tools_git_diff(self):
+        """git operation=diff → GitHelper.diff() (line 635)."""
+        from client.handler import ToolExecutor
+        from client.tools import GitHelper
+
+        config = ClientConfig()
+        executor = ToolExecutor(config)
+
+        with patch("client.handler.get_tool", return_value=GitHelper):
+            with patch.object(GitHelper, "diff", return_value="--- a/file.py\n+++ b/file.py"):
+                result = await executor._execute_from_tools("git", {
+                    "operation": "diff",
+                    "file": "file.py"
+                })
+                assert "--- a/file.py" in result
+
+    @pytest.mark.asyncio
+    async def test_execute_from_tools_git_log(self):
+        """git operation=log → GitHelper.log() (line 637)."""
+        from client.handler import ToolExecutor
+        from client.tools import GitHelper
+
+        config = ClientConfig()
+        executor = ToolExecutor(config)
+
+        commits = [
+            {"hash": "abc123", "message": "feat: add feature"},
+            {"hash": "def456", "message": "fix: fix bug"}
+        ]
+        with patch("client.handler.get_tool", return_value=GitHelper):
+            with patch.object(GitHelper, "log", return_value=commits):
+                result = await executor._execute_from_tools("git", {
+                    "operation": "log",
+                    "limit": 10
+                })
+                assert "abc123" in result
+                assert "feat: add feature" in result
+
+    @pytest.mark.asyncio
+    async def test_execute_from_tools_git_branch(self):
+        """git operation=branch → GitHelper.branch() (line 640)."""
+        from client.handler import ToolExecutor
+        from client.tools import GitHelper
+
+        config = ClientConfig()
+        executor = ToolExecutor(config)
+
+        with patch("client.handler.get_tool", return_value=GitHelper):
+            with patch.object(GitHelper, "branch", return_value="* main"):
+                result = await executor._execute_from_tools("git", {
+                    "operation": "branch"
+                })
+                assert "main" in result
+
+    @pytest.mark.asyncio
+    async def test_execute_from_tools_git_status(self):
+        """git operation=status (default) → GitHelper.status() (line 633)."""
+        from client.handler import ToolExecutor
+        from client.tools import GitHelper
+
+        config = ClientConfig()
+        executor = ToolExecutor(config)
+
+        with patch("client.handler.get_tool", return_value=GitHelper):
+            with patch.object(GitHelper, "status", return_value="On branch main\nnothing to commit"):
+                result = await executor._execute_from_tools("git", {
+                    "operation": "status"
+                })
+                assert "On branch main" in result
+
+
+class TestExecuteFromToolsDocker:
+    """Test docker tool execution (lines 643-654)."""
+
+    @pytest.mark.asyncio
+    async def test_execute_from_tools_docker_ps(self):
+        """docker operation=ps → DockerHelper.ps() (line 645)."""
+        from client.handler import ToolExecutor
+        from client.tools import DockerHelper
+
+        config = ClientConfig()
+        executor = ToolExecutor(config)
+
+        containers = [
+            {"id": "abc123def", "name": "web", "status": "running"}
+        ]
+        with patch("client.handler.get_tool", return_value=DockerHelper):
+            with patch.object(DockerHelper, "ps", return_value=containers):
+                result = await executor._execute_from_tools("docker", {
+                    "operation": "ps",
+                    "all": False
+                })
+                assert "abc123def" in result
+                assert "web" in result
+
+    @pytest.mark.asyncio
+    async def test_execute_from_tools_docker_ps_empty(self):
+        """docker operation=ps returns empty → 'No containers found' (line 647)."""
+        from client.handler import ToolExecutor
+        from client.tools import DockerHelper
+
+        config = ClientConfig()
+        executor = ToolExecutor(config)
+
+        with patch("client.handler.get_tool", return_value=DockerHelper):
+            with patch.object(DockerHelper, "ps", return_value=[]):
+                result = await executor._execute_from_tools("docker", {
+                    "operation": "ps"
+                })
+                assert result == "No containers found"
+
+    @pytest.mark.asyncio
+    async def test_execute_from_tools_docker_logs(self):
+        """docker operation=logs → DockerHelper.logs() (line 650)."""
+        from client.handler import ToolExecutor
+        from client.tools import DockerHelper
+
+        config = ClientConfig()
+        executor = ToolExecutor(config)
+
+        with patch("client.handler.get_tool", return_value=DockerHelper):
+            with patch.object(DockerHelper, "logs", return_value="Container logs here"):
+                result = await executor._execute_from_tools("docker", {
+                    "operation": "logs",
+                    "container": "web",
+                    "lines": 100
+                })
+                assert "Container logs here" in result
+
+    @pytest.mark.asyncio
+    async def test_execute_from_tools_docker_restart(self):
+        """docker operation=restart → DockerHelper.restart() (line 652)."""
+        from client.handler import ToolExecutor
+        from client.tools import DockerHelper
+
+        config = ClientConfig()
+        executor = ToolExecutor(config)
+
+        with patch("client.handler.get_tool", return_value=DockerHelper):
+            with patch.object(DockerHelper, "restart", return_value=True):
+                result = await executor._execute_from_tools("docker", {
+                    "operation": "restart",
+                    "container": "web"
+                })
+                assert "True" in result
+
+    @pytest.mark.asyncio
+    async def test_execute_from_tools_docker_status(self):
+        """docker operation=status → DockerHelper.status() (line 654)."""
+        from client.handler import ToolExecutor
+        from client.tools import DockerHelper
+
+        config = ClientConfig()
+        executor = ToolExecutor(config)
+
+        with patch("client.handler.get_tool", return_value=DockerHelper):
+            with patch.object(DockerHelper, "status", return_value={"running": 2, "stopped": 1}):
+                result = await executor._execute_from_tools("docker", {
+                    "operation": "status"
+                })
+                assert "running" in result
+
+
+class TestExecuteFromToolsDatabase:
+    """Test database tool execution (lines 657-668)."""
+
+    @pytest.mark.asyncio
+    async def test_execute_from_tools_database_query(self):
+        """database operation=query → DatabaseTool.query() (line 659)."""
+        from client.handler import ToolExecutor
+        from client.tools import DatabaseTool
+
+        config = ClientConfig()
+        executor = ToolExecutor(config)
+
+        with patch("client.handler.get_tool", return_value=DatabaseTool):
+            with patch.object(DatabaseTool, "query", return_value=[{"col": "val"}]):
+                result = await executor._execute_from_tools("database", {
+                    "operation": "query",
+                    "db_path": "/tmp/test.db",
+                    "sql": "SELECT * FROM users"
+                })
+                assert "col" in result
+
+    @pytest.mark.asyncio
+    async def test_execute_from_tools_database_execute(self):
+        """database operation=execute → DatabaseTool.execute() (line 662)."""
+        from client.handler import ToolExecutor
+        from client.tools import DatabaseTool
+
+        config = ClientConfig()
+        executor = ToolExecutor(config)
+
+        with patch("client.handler.get_tool", return_value=DatabaseTool):
+            with patch.object(DatabaseTool, "execute", return_value={"rows_affected": 1}):
+                result = await executor._execute_from_tools("database", {
+                    "operation": "execute",
+                    "db_path": "/tmp/test.db",
+                    "sql": "INSERT INTO users VALUES (1)"
+                })
+                assert "rows_affected" in result
+
+    @pytest.mark.asyncio
+    async def test_execute_from_tools_database_list_tables(self):
+        """database operation=list_tables → DatabaseTool.list_tables() (line 664)."""
+        from client.handler import ToolExecutor
+        from client.tools import DatabaseTool
+
+        config = ClientConfig()
+        executor = ToolExecutor(config)
+
+        with patch("client.handler.get_tool", return_value=DatabaseTool):
+            with patch.object(DatabaseTool, "list_tables", return_value=["users", "posts"]):
+                result = await executor._execute_from_tools("database", {
+                    "operation": "list_tables",
+                    "db_path": "/tmp/test.db"
+                })
+                assert "users" in result
+
+    @pytest.mark.asyncio
+    async def test_execute_from_tools_database_table_info(self):
+        """database operation=table_info → DatabaseTool.table_info() (line 666)."""
+        from client.handler import ToolExecutor
+        from client.tools import DatabaseTool
+
+        config = ClientConfig()
+        executor = ToolExecutor(config)
+
+        with patch("client.handler.get_tool", return_value=DatabaseTool):
+            with patch.object(DatabaseTool, "table_info", return_value={"name": "users", "columns": 3}):
+                result = await executor._execute_from_tools("database", {
+                    "operation": "table_info",
+                    "db_path": "/tmp/test.db",
+                    "table": "users"
+                })
+                assert "name" in result
+
+    @pytest.mark.asyncio
+    async def test_execute_from_tools_database_create_table(self):
+        """database operation=create_table → DatabaseTool.create_table() (line 668)."""
+        from client.handler import ToolExecutor
+        from client.tools import DatabaseTool
+
+        config = ClientConfig()
+        executor = ToolExecutor(config)
+
+        with patch("client.handler.get_tool", return_value=DatabaseTool):
+            with patch.object(DatabaseTool, "create_table", return_value={"created": True}):
+                result = await executor._execute_from_tools("database", {
+                    "operation": "create_table",
+                    "db_path": "/tmp/test.db",
+                    "table": "users",
+                    "columns": {"id": "INTEGER", "name": "TEXT"}
+                })
+                assert "created" in result
+
+
+class TestExecuteFromToolsImage:
+    """Test image tool execution (lines 675-698)."""
+
+    @pytest.mark.asyncio
+    async def test_execute_from_tools_image_resize(self):
+        """image operation=resize → ImageTool.resize() (line 679)."""
+        from client.handler import ToolExecutor
+        from client.tools import ImageTool
+
+        config = ClientConfig()
+        executor = ToolExecutor(config)
+
+        with patch("client.handler.get_tool", return_value=ImageTool):
+            with patch.object(ImageTool, "resize", return_value={"width": 100, "height": 100}):
+                result = await executor._execute_from_tools("image", {
+                    "operation": "resize",
+                    "path": "/tmp/input.png",
+                    "output": "/tmp/output.png",
+                    "width": 100,
+                    "height": 100
+                })
+                assert "width" in result
+
+    @pytest.mark.asyncio
+    async def test_execute_from_tools_image_thumbnail(self):
+        """image operation=thumbnail → ImageTool.thumbnail() (line 686)."""
+        from client.handler import ToolExecutor
+        from client.tools import ImageTool
+
+        config = ClientConfig()
+        executor = ToolExecutor(config)
+
+        with patch("client.handler.get_tool", return_value=ImageTool):
+            with patch.object(ImageTool, "thumbnail", return_value={"width": 256, "height": 256}):
+                result = await executor._execute_from_tools("image", {
+                    "operation": "thumbnail",
+                    "path": "/tmp/input.png",
+                    "output": "/tmp/output.png",
+                    "max_size": 256
+                })
+                assert "width" in result
+
+    @pytest.mark.asyncio
+    async def test_execute_from_tools_image_convert(self):
+        """image operation=convert → ImageTool.convert() (line 692)."""
+        from client.handler import ToolExecutor
+        from client.tools import ImageTool
+
+        config = ClientConfig()
+        executor = ToolExecutor(config)
+
+        with patch("client.handler.get_tool", return_value=ImageTool):
+            with patch.object(ImageTool, "convert", return_value={"format": "PNG", "path": "/tmp/output.png"}):
+                result = await executor._execute_from_tools("image", {
+                    "operation": "convert",
+                    "input_path": "/tmp/input.jpg",
+                    "output_path": "/tmp/output.png",
+                    "format": "PNG"
+                })
+                assert "format" in result
+
+    @pytest.mark.asyncio
+    async def test_execute_from_tools_image_compress(self):
+        """image operation=compress → ImageTool.compress() (line 698)."""
+        from client.handler import ToolExecutor
+        from client.tools import ImageTool
+
+        config = ClientConfig()
+        executor = ToolExecutor(config)
+
+        with patch("client.handler.get_tool", return_value=ImageTool):
+            with patch.object(ImageTool, "compress", return_value={"size": 1024, "ratio": 0.5}):
+                result = await executor._execute_from_tools("image", {
+                    "operation": "compress",
+                    "path": "/tmp/input.png",
+                    "output": "/tmp/output.png",
+                    "quality": 85
+                })
+                assert "size" in result
+
+    @pytest.mark.asyncio
+    async def test_execute_from_tools_image_info(self):
+        """image operation=info (default) → ImageTool.info() (line 677)."""
+        from client.handler import ToolExecutor
+        from client.tools import ImageTool
+
+        config = ClientConfig()
+        executor = ToolExecutor(config)
+
+        with patch("client.handler.get_tool", return_value=ImageTool):
+            with patch.object(ImageTool, "info", return_value={"width": 800, "height": 600, "format": "PNG"}):
+                result = await executor._execute_from_tools("image", {
+                    "operation": "info",
+                    "path": "/tmp/test.png"
+                })
+                assert "width" in result
+
+
+class TestExecuteFromToolsNotification:
+    """Test notification tool execution (lines 705-722)."""
+
+    @pytest.mark.asyncio
+    async def test_execute_from_tools_notification_email(self):
+        """notification operation=email → NotificationTool.send_email() (line 707)."""
+        from client.handler import ToolExecutor
+        from client.tools import NotificationTool
+
+        config = ClientConfig()
+        executor = ToolExecutor(config)
+
+        with patch("client.handler.get_tool", return_value=NotificationTool):
+            with patch.object(NotificationTool, "send_email", return_value={"sent": True}):
+                result = await executor._execute_from_tools("notification", {
+                    "operation": "email",
+                    "to": "test@example.com",
+                    "subject": "Test",
+                    "body": "Hello"
+                })
+                assert "sent" in result
+
+    @pytest.mark.asyncio
+    async def test_execute_from_tools_notification_push(self):
+        """notification operation=push → NotificationTool.push() (line 716)."""
+        from client.handler import ToolExecutor
+        from client.tools import NotificationTool
+
+        config = ClientConfig()
+        executor = ToolExecutor(config)
+
+        with patch("client.handler.get_tool", return_value=NotificationTool):
+            with patch.object(NotificationTool, "push", return_value={"id": "push-123"}):
+                result = await executor._execute_from_tools("notification", {
+                    "operation": "push",
+                    "title": "Alert",
+                    "body": "Something happened",
+                    "priority": "high"
+                })
+                assert "push-123" in result
+
+    @pytest.mark.asyncio
+    async def test_execute_from_tools_notification_slack(self):
+        """notification operation=slack → NotificationTool.slack_webhook() (line 722)."""
+        from client.handler import ToolExecutor
+        from client.tools import NotificationTool
+
+        config = ClientConfig()
+        executor = ToolExecutor(config)
+
+        with patch("client.handler.get_tool", return_value=NotificationTool):
+            with patch.object(NotificationTool, "slack_webhook", return_value={"ok": True}):
+                result = await executor._execute_from_tools("notification", {
+                    "operation": "slack",
+                    "webhook_url": "https://hooks.slack.com/xxx",
+                    "text": "Hello",
+                    "channel": "#general"
+                })
+                assert "ok" in result
+
+
+class TestExecuteFromToolsMonitor:
+    """Test monitor tool execution (lines 748-772)."""
+
+    @pytest.mark.asyncio
+    async def test_execute_from_tools_monitor_check_disk(self):
+        """monitor operation=check_disk → MonitorTool.check_disk() (line 751)."""
+        from client.handler import ToolExecutor
+        from client.tools import MonitorTool
+
+        config = ClientConfig()
+        executor = ToolExecutor(config)
+
+        with patch("client.handler.get_tool", return_value=MonitorTool):
+            with patch.object(MonitorTool, "check_disk", return_value={"healthy": True, "percent": 50}):
+                result = await executor._execute_from_tools("monitor", {
+                    "operation": "check_disk",
+                    "threshold": 90
+                })
+                assert "healthy" in result
+
+    @pytest.mark.asyncio
+    async def test_execute_from_tools_monitor_check_memory(self):
+        """monitor operation=check_memory → MonitorTool.check_memory() (line 753)."""
+        from client.handler import ToolExecutor
+        from client.tools import MonitorTool
+
+        config = ClientConfig()
+        executor = ToolExecutor(config)
+
+        with patch("client.handler.get_tool", return_value=MonitorTool):
+            with patch.object(MonitorTool, "check_memory", return_value={"healthy": True, "percent": 60}):
+                result = await executor._execute_from_tools("monitor", {
+                    "operation": "check_memory",
+                    "threshold": 90
+                })
+                assert "healthy" in result
+
+    @pytest.mark.asyncio
+    async def test_execute_from_tools_monitor_check_cpu(self):
+        """monitor operation=check_cpu → MonitorTool.check_cpu() (line 755)."""
+        from client.handler import ToolExecutor
+        from client.tools import MonitorTool
+
+        config = ClientConfig()
+        executor = ToolExecutor(config)
+
+        with patch("client.handler.get_tool", return_value=MonitorTool):
+            with patch.object(MonitorTool, "check_cpu", return_value={"healthy": True, "load": 0.5}):
+                result = await executor._execute_from_tools("monitor", {
+                    "operation": "check_cpu",
+                    "threshold": 80.0
+                })
+                assert "healthy" in result
+
+    @pytest.mark.asyncio
+    async def test_execute_from_tools_monitor_check_port(self):
+        """monitor operation=check_port → MonitorTool.check_port() (line 757)."""
+        from client.handler import ToolExecutor
+        from client.tools import MonitorTool
+
+        config = ClientConfig()
+        executor = ToolExecutor(config)
+
+        with patch("client.handler.get_tool", return_value=MonitorTool):
+            with patch.object(MonitorTool, "check_port", return_value={"open": True, "port": 8080}):
+                result = await executor._execute_from_tools("monitor", {
+                    "operation": "check_port",
+                    "port": 8080,
+                    "host": "localhost"
+                })
+                assert "open" in result
+
+    @pytest.mark.asyncio
+    async def test_execute_from_tools_monitor_check_url(self):
+        """monitor operation=check_url → MonitorTool.check_url() (line 762)."""
+        from client.handler import ToolExecutor
+        from client.tools import MonitorTool
+
+        config = ClientConfig()
+        executor = ToolExecutor(config)
+
+        with patch("client.handler.get_tool", return_value=MonitorTool):
+            with patch.object(MonitorTool, "check_url", return_value={"status": 200, "healthy": True}):
+                result = await executor._execute_from_tools("monitor", {
+                    "operation": "check_url",
+                    "url": "https://example.com",
+                    "timeout": 10
+                })
+                assert "status" in result
+
+    @pytest.mark.asyncio
+    async def test_execute_from_tools_monitor_health_check(self):
+        """monitor operation=health_check → MonitorTool.health_check() (line 767)."""
+        from client.handler import ToolExecutor
+        from client.tools import MonitorTool
+
+        config = ClientConfig()
+        executor = ToolExecutor(config)
+
+        with patch("client.handler.get_tool", return_value=MonitorTool):
+            with patch.object(MonitorTool, "health_check", return_value={"healthy": True, "services": {}}):
+                result = await executor._execute_from_tools("monitor", {
+                    "operation": "health_check",
+                    "port": 3000
+                })
+                assert "healthy" in result
+
+    @pytest.mark.asyncio
+    async def test_execute_from_tools_unsupported_operation(self):
+        """tool exists but operation not supported → line 769."""
+        from client.handler import ToolExecutor
+        from client.tools import MonitorTool
+
+        config = ClientConfig()
+        executor = ToolExecutor(config)
+
+        with patch("client.handler.get_tool", return_value=MonitorTool):
+            result = await executor._execute_from_tools("monitor", {
+                "operation": "unsupported_op_xyz"
+            })
+            assert "exists but operation not supported" in result
+
+    @pytest.mark.asyncio
+    async def test_execute_from_tools_exception(self):
+        """tool execution raises exception → exception handler (lines 771-772)."""
+        from client.handler import ToolExecutor
+        from client.tools import MonitorTool
+
+        config = ClientConfig()
+        executor = ToolExecutor(config)
+
+        def raise_error(*args, **kwargs):
+            raise RuntimeError("Tool execution failed")
+
+        with patch("client.handler.get_tool", return_value=MonitorTool):
+            with patch.object(MonitorTool, "health_check", side_effect=RuntimeError("Tool execution failed")):
+                result = await executor._execute_from_tools("monitor", {
+                    "operation": "health_check",
+                    "port": 3000
+                })
+                assert "Error executing tool" in result
+                assert "monitor" in result
 

@@ -8,6 +8,12 @@ from pathlib import Path
 
 import pytest
 
+# Pre-import PIL.Image so @patch('PIL.Image') works in tests
+try:
+    from PIL import Image  # noqa: F401
+except ImportError:
+    pass
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 

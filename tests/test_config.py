@@ -23,7 +23,7 @@ class TestClientConfigDefaults:
         assert config.server_api_url == "https://cc-claw.example.com/api"
         assert config.device_token is None
         assert config.claude_path == "claude"
-        assert config.timeout == 600
+        assert config.timeout == 1800
         assert config.auto_reconnect is True
         assert config.reconnect_delay == 5
         assert config.log_level == "INFO"

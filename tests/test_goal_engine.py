@@ -109,6 +109,31 @@ class TestParseTasks:
         tasks = self.engine._parse_tasks(None)
         assert tasks == []
 
+    def test_parse_fallback_finds_array_in_text(self):
+        """Main json.loads fails but fallback finds [array] in text and succeeds."""
+        # Response starts with non-JSON text, but contains ["task 1", "task 2"]
+        response = 'Here is the result: ["fallback task 1", "fallback task 2"]'
+
+        tasks = self.engine._parse_tasks(response)
+
+        assert tasks == ["fallback task 1", "fallback task 2"]
+
+    def test_parse_fallback_no_bracket_returns_empty(self):
+        """Main fails, no '[' in text → fallback returns empty."""
+        response = "Plain text with no JSON or brackets"
+
+        tasks = self.engine._parse_tasks(response)
+
+        assert tasks == []
+
+    def test_parse_fallback_bracket_but_invalid_array_returns_empty(self):
+        """Main fails, '[' found but what follows is not a valid array of strings."""
+        response = "Text with [123] but not string array"
+
+        tasks = self.engine._parse_tasks(response)
+
+        assert tasks == []
+
 
 class TestDecomposeGoal:
     """Test goal decomposition into tasks."""
@@ -172,3 +197,148 @@ class TestDecomposeGoal:
         tasks = await engine.decompose_goal("goal-001")
 
         assert tasks == []
+
+
+class TestAutoDecomposeIfEmpty:
+    """Test auto_decompose_if_empty() branching."""
+
+    @pytest.mark.asyncio
+    async def test_returns_pending_when_tasks_exist(self):
+        """Has pending tasks → returns pending without calling decompose_goal."""
+        profile = MagicMock()
+        goal = Goal(id="goal-001", description="Test goal", status=GoalStatus.ACTIVE)
+        profile.goals = [goal]
+
+        pending_task = Task(id="task-1", description="pending task", goal_id="goal-001", status=TaskStatus.PENDING)
+        profile.get_tasks_for_goal.return_value = [pending_task]
+
+        mock_claude = AsyncMock()
+        engine = GoalEngine(MagicMock(), profile, mock_claude)
+
+        result = await engine.auto_decompose_if_empty("goal-001")
+
+        assert result == [pending_task]
+        assert not mock_claude.execute.called  # decompose_goal NOT called
+
+    @pytest.mark.asyncio
+    async def test_calls_decompose_when_no_pending_tasks(self):
+        """No pending tasks → calls decompose_goal and returns its result."""
+        profile = MagicMock()
+        goal = Goal(id="goal-001", description="Test goal", status=GoalStatus.ACTIVE)
+        profile.goals = [goal]
+        profile.profile.onboarding_completed = True
+        profile.profile.profession = "Engineer"
+        profile.profile.situation = "Testing"
+        profile.profile.short_term_goal = "Test"
+        profile.profile.what_better_means = "Better"
+
+        # No pending tasks
+        profile.get_tasks_for_goal.return_value = []
+
+        mock_task = Task(id="new-task", description="decomposed task", goal_id="goal-001")
+        profile.add_task = MagicMock(return_value=mock_task)
+
+        mock_claude = AsyncMock()
+        mock_claude.execute.return_value = ('{"tasks": ["decomposed task"]}', [], None)
+
+        engine = GoalEngine(MagicMock(), profile, mock_claude)
+
+        result = await engine.auto_decompose_if_empty("goal-001")
+
+        assert result == [mock_task]
+        assert mock_claude.execute.called
+
+
+class TestSuggestNextTask:
+    """Test suggest_next_task() branching."""
+
+    @pytest.mark.asyncio
+    async def test_returns_task_when_goal_not_found(self):
+        """Goal not found → returns None."""
+        profile = MagicMock()
+        profile.goals = []
+
+        engine = GoalEngine(MagicMock(), profile, AsyncMock())
+
+        result = await engine.suggest_next_task("nonexistent")
+
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_returns_recommendation_when_pending_tasks_exist(self):
+        """Has pending tasks → calls claude.execute and returns response."""
+        profile = MagicMock()
+        goal = Goal(id="goal-001", description="Complete project", status=GoalStatus.ACTIVE)
+        profile.goals = [goal]
+
+        pending_task = Task(
+            id="task-1", description="Write tests", goal_id="goal-001",
+            status=TaskStatus.PENDING, result_summary="done"
+        )
+        completed_task = Task(
+            id="task-0", description="Setup", goal_id="goal-001",
+            status=TaskStatus.COMPLETED, result_summary="finished setup"
+        )
+        profile.get_tasks_for_goal.return_value = [completed_task, pending_task]
+
+        mock_claude = AsyncMock()
+        mock_claude.execute.return_value = ("Write more tests", [], None)
+
+        engine = GoalEngine(MagicMock(), profile, mock_claude)
+
+        result = await engine.suggest_next_task("goal-001")
+
+        assert result == "Write more tests"
+        mock_claude.execute.assert_called_once()
+        call_args = mock_claude.execute.call_args[0][0]
+        assert "Write tests" in call_args
+        assert "Setup" in call_args
+
+    @pytest.mark.asyncio
+    async def test_returns_none_when_no_pending_and_strip_fails(self):
+        """No pending tasks, claude returns whitespace → returns None."""
+        profile = MagicMock()
+        goal = Goal(id="goal-001", description="All done", status=GoalStatus.ACTIVE)
+        profile.goals = [goal]
+
+        completed_task = Task(
+            id="task-1", description="Finish work", goal_id="goal-001",
+            status=TaskStatus.COMPLETED, result_summary="completed"
+        )
+        profile.get_tasks_for_goal.return_value = [completed_task]
+
+        mock_claude = AsyncMock()
+        mock_claude.execute.return_value = ("   ", [], None)  # whitespace only
+
+        engine = GoalEngine(MagicMock(), profile, mock_claude)
+
+        result = await engine.suggest_next_task("goal-001")
+
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_prompt_includes_completed_and_pending(self):
+        """Prompt contains both completed and pending task info."""
+        profile = MagicMock()
+        goal = Goal(id="goal-001", description="Build feature", status=GoalStatus.ACTIVE)
+        profile.goals = [goal]
+
+        pending_tasks = [
+            Task(id=f"task-{i}", description=f"Task {i}", goal_id="goal-001", status=TaskStatus.PENDING)
+            for i in range(12)
+        ]
+        completed = Task(id="task-done", description="Init", goal_id="goal-001",
+                         status=TaskStatus.COMPLETED, result_summary="initialized")
+        profile.get_tasks_for_goal.return_value = completed, *pending_tasks[:10]
+
+        mock_claude = AsyncMock()
+        mock_claude.execute.return_value = ("Next task suggestion", [], None)
+
+        engine = GoalEngine(MagicMock(), profile, mock_claude)
+
+        await engine.suggest_next_task("goal-001")
+
+        prompt = mock_claude.execute.call_args[0][0]
+        # Only first 10 pending tasks included
+        assert prompt.count("Task") == 10
+        assert "initialized" in prompt
