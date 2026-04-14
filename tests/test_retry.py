@@ -291,3 +291,141 @@ class TestGetAllStats:
         assert "operations" in all_stats
         assert "circuit_breakers" in all_stats
         assert all_stats["operations"] == {}
+
+
+class TestSmartRetryExecuteCircuitBreakerOnSuccess:
+    """Test cb.record_success() is called on retry success (line 245)."""
+
+    def setup_method(self):
+        self.retry = SmartRetry()
+
+    @pytest.mark.asyncio
+    async def test_execute_calls_record_success_on_retry_success(self):
+        """Line 245: cb.record_success() is called when a retried attempt succeeds.
+        Put CB in HALF_OPEN state first so record_success() actually increments _success_count."""
+        call_count = 0
+
+        async def flaky_func():
+            nonlocal call_count
+            call_count += 1
+            if call_count < 2:
+                raise ConnectionError(f"Attempt {call_count}")
+            return "done"
+
+        # Inject a pre-configured CB (failure_threshold=1) so one failure opens it
+        cb = CircuitBreaker(name="test-svc-half-open", failure_threshold=1, timeout=0.05)
+        self.retry._circuit_breakers["test-svc-half-open"] = cb
+
+        # Put CB into HALF_OPEN state: record failure, then wait for timeout
+        cb.record_failure()
+        assert cb.state == CircuitState.OPEN
+        time.sleep(0.1)
+        assert cb.state == CircuitState.HALF_OPEN
+
+        config = RetryConfig(max_retries=3, base_delay=0.01)
+        result = await self.retry.execute(
+            "cb-success-test", flaky_func,
+            config=config,
+            circuit_breaker_name="test-svc-half-open"
+        )
+
+        assert result == "done"
+        # record_success was called once when the retry succeeded (HALF_OPEN → increments _success_count)
+        assert cb._success_count >= 1
+
+
+class TestCircuitBreakerOpenUnreachable:
+    """Line 257: except CircuitBreakerOpen: raise is unreachable — CB is checked
+    before the try block at line 218, not raised inside it."""
+
+    @pytest.mark.asyncio
+    async def test_circuit_breaker_open_reraised_before_try_block(self):
+        """CircuitBreakerOpen is raised at line 218 (before try), not caught inside it."""
+        retry = SmartRetry()
+        cb = retry.get_circuit_breaker("unreachable-cb")
+        # Pre-open the circuit breaker so the check at line 218 fires first
+        for _ in range(5):
+            cb.record_failure()
+        assert cb.state == CircuitState.OPEN
+
+        async def dummy():
+            return "ok"
+
+        config = RetryConfig(max_retries=1, base_delay=0.01)
+        with pytest.raises(CircuitBreakerOpen):
+            await retry.execute("cb-open", dummy, config=config, circuit_breaker_name="unreachable-cb")
+
+
+class TestGetRetryManagerSingleton:
+    """Test get_retry_manager() singleton (lines 327-329)."""
+
+    def test_singleton_returns_same_instance(self):
+        from client.retry import get_retry_manager, SmartRetry, _retry_manager
+        import client.retry as retry_module
+
+        # Reset the global
+        retry_module._retry_manager = None
+        try:
+            mgr1 = get_retry_manager()
+            mgr2 = get_retry_manager()
+            assert mgr1 is mgr2
+            assert isinstance(mgr1, SmartRetry)
+        finally:
+            retry_module._retry_manager = None  # restore
+
+    def test_singleton_creates_new_instance_after_reset(self):
+        from client.retry import get_retry_manager
+        import client.retry as retry_module
+
+        retry_module._retry_manager = None
+        mgr1 = get_retry_manager()
+        retry_module._retry_manager = None
+        mgr2 = get_retry_manager()
+        assert mgr1 is not mgr2
+        retry_module._retry_manager = None  # restore
+
+
+class TestWithRetryDecorator:
+    """Test with_retry decorator (lines 344-359)."""
+
+    def setup_method(self):
+        from client.retry import get_retry_manager, _retry_manager
+        import client.retry as retry_module
+        retry_module._retry_manager = None  # reset singleton
+
+    def teardown_method(self):
+        from client.retry import _retry_manager
+        import client.retry as retry_module
+        retry_module._retry_manager = None
+
+    @pytest.mark.asyncio
+    async def test_decorator_retries_and_succeeds(self):
+        from client.retry import with_retry, RetryConfig
+
+        call_count = 0
+
+        @with_retry(operation="decorated-op", config=RetryConfig(max_retries=3, base_delay=0.01))
+        async def flaky_op():
+            nonlocal call_count
+            call_count += 1
+            if call_count < 2:
+                raise ConnectionError("flaky")
+            return "success"
+
+        result = await flaky_op()
+        assert result == "success"
+        assert call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_decorator_uses_operation_name(self):
+        from client.retry import with_retry, RetryConfig, get_retry_manager
+
+        @with_retry(operation="my-named-op")
+        async def always_succeeds():
+            return "ok"
+
+        await always_succeeds()
+        mgr = get_retry_manager()
+        stats = mgr.get_stats("my-named-op")
+        assert stats.attempts == 1
+

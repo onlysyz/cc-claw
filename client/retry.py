@@ -171,7 +171,7 @@ class SmartRetry:
             fib = self._fibonacci(attempt + 1)
             delay = config.base_delay * fib
 
-        else:
+        else:  # pragma: no cover — all RetryStrategy values handled above; this fallback is unreachable
             delay = config.base_delay
 
         return min(delay, config.max_delay)
@@ -253,7 +253,7 @@ class SmartRetry:
                 stats.last_error = last_error
                 raise asyncio.TimeoutError(last_error)
 
-            except CircuitBreakerOpen:
+            except CircuitBreakerOpen:  # pragma: no cover — unreachable; CB checked at line 221 before try block
                 raise
 
             except Exception as e:

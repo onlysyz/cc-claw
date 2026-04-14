@@ -458,3 +458,101 @@ class TestProfileManagerSaveLoad:
             assert pm.profile is not None  # initialised empty
             assert pm.goals == []
             assert pm.tasks == []
+
+
+# ---------------------------------------------------------------------------
+# save_profile / is_onboarding_complete / Windows path / format_progress
+# ---------------------------------------------------------------------------
+
+class TestProfileManagerSaveProfile:
+    """Test save_profile (lines 203-211) and is_onboarding_complete (line 214)."""
+
+    def test_save_profile_sets_fields_and_calls_save(self, pm, tmp_path):
+        """Lines 203-211: save_profile populates profile and persists."""
+        path = tmp_path / "profile.json"
+        with patch.object(ProfileManager, '_get_default_path', return_value=path):
+            pm.save_profile(
+                profession="Designer",
+                situation="Building UI",
+                short_term_goal="Ship features",
+                what_better_means="Better UX",
+                preferences={"theme": "dark"},
+            )
+            assert pm.profile.profession == "Designer"
+            assert pm.profile.onboarding_completed is True
+            assert pm.profile.preferences.get("theme") == "dark"
+            # Verify persisted to disk
+            saved = ProfileManager()
+            assert saved.profile.profession == "Designer"
+
+    def test_save_profile_without_preferences(self, pm, tmp_path):
+        """Line 209: preferences branch is optional (not called when preferences=None)."""
+        path = tmp_path / "profile.json"
+        with patch.object(ProfileManager, '_get_default_path', return_value=path):
+            pm.save_profile("Doctor", "Healthcare", "Heal patients", "Better care")
+            assert pm.profile.preferences == {}  # unchanged, not error
+
+    def test_is_onboarding_complete_true(self, pm):
+        """Line 214: returns True when onboarding_completed is True."""
+        pm.profile.onboarding_completed = True
+        assert pm.is_onboarding_complete() is True
+
+    def test_is_onboarding_complete_false(self, pm):
+        """Line 214: returns False when onboarding_completed is False."""
+        pm.profile.onboarding_completed = False
+        assert pm.is_onboarding_complete() is False
+
+    def test_is_onboarding_complete_no_profile(self):
+        """Line 214: handles None profile gracefully."""
+        with patch.object(ProfileManager, '_get_default_path', return_value=Path("/tmp/none.json")):
+            pm = ProfileManager()
+            pm.profile = None
+            # self.profile and ... → None and ... → None (not False)
+            assert not pm.is_onboarding_complete()
+
+    def test_get_active_goal_falls_back_when_active_goal_id_is_none(self, pm, goal_a):
+        """Lines 237-238: fallback branch when active_goal_id is None but goals exist."""
+        pm.active_goal_id = None  # force None to hit the primary fallback
+        result = pm.get_active_goal()
+        assert result is goal_a  # falls back to first active goal
+
+
+class TestProfileManagerGetDefaultPathWindows:
+    """Test _get_default_path Windows branch (lines 155-159)."""
+
+    def test_windows_path(self, tmp_path):
+        """Lines 155-159: Windows uses APPDATA env var."""
+        with patch("os.name", "nt"):
+            with patch.dict("os.environ", {"APPDATA": str(tmp_path)}, clear=False):
+                with patch("client.profile.Path", return_value=tmp_path):
+                    path = ProfileManager()._get_default_path()
+                    assert str(path).replace("\\", "/").startswith(str(tmp_path).replace("\\", "/"))
+
+
+class TestProfileManagerGetDefaultPathPosix:
+    """Test _get_default_path non-Windows branch (line 158)."""
+
+    def test_posix_path(self, tmp_path, monkeypatch):
+        """Line 158: non-Windows uses Path.home() / .config."""
+        monkeypatch.setattr("client.profile.Path.home", lambda: tmp_path)
+        path = ProfileManager()._get_default_path()
+        assert str(path).startswith(str(tmp_path))
+
+
+class TestProfileManagerFormatProgress:
+    """Test format_progress formatting branches (lines 418, 429)."""
+
+    def test_format_progress_incomplete_onboarding(self, pm):
+        """Line 418: shows warning when onboarding not completed."""
+        pm.profile.onboarding_completed = False
+        pm.profile.profession = None
+        output = pm.format_progress()
+        assert "⚠️ Onboarding not completed" in output
+
+    def test_format_progress_rate_limited(self, pm):
+        """Line 429: shows rate limit warning when is_rate_limited is True."""
+        pm.token_budget.is_rate_limited = True
+        pm.token_budget.backoff_level = 2
+        output = pm.format_progress()
+        assert "⛔ Rate limited" in output
+        assert "backoff level 2" in output

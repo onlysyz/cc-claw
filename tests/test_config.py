@@ -50,6 +50,68 @@ class TestClientConfigGetDefaultPath:
                 path = ClientConfig.get_default_config_path()
                 assert path == Path("/home/testuser/.config/cc-claw/config.json")
 
+    def test_windows_path(self):
+        """Line 64: Windows branch uses APPDATA environment variable."""
+        appdata_val = "D:\\Users\\Test"
+        # Build a fake path that supports the / operator
+        fake_base = Path(appdata_val)
+        # Patch Path so WindowsPath isn't instantiated on macOS
+        with patch("os.name", "nt"):
+            with patch.dict("os.environ", {"APPDATA": appdata_val}, clear=False):
+                with patch("client.config.Path", return_value=fake_base):
+                    path = ClientConfig.get_default_config_path()
+                    assert str(path).replace("\\", "/") == "D:/Users/Test/cc-claw/config.json"
+
+
+class TestClientConfigLoadDefaultPath:
+    """Test load() calls get_default_config_path() when no path given (line 35)."""
+
+    def test_load_with_no_path_uses_default_path(self, temp_dir, monkeypatch):
+        """Line 35: load() with no path calls get_default_config_path()."""
+        # Patch the method, not the module-level os.name, to avoid polluting global state
+        fake_path = temp_dir / "config.json"
+        fake_path.write_text(json.dumps({"timeout": 777}))
+
+        original_get_default = ClientConfig.get_default_config_path
+        ClientConfig.get_default_config_path = classmethod(lambda cls: fake_path)
+
+        try:
+            config = ClientConfig.load()
+            assert config.timeout == 777
+        finally:
+            ClientConfig.get_default_config_path = original_get_default
+
+    def test_load_env_overrides_file(self, temp_dir, monkeypatch):
+        """Env vars override file config (lines 44-47)."""
+        config_path = temp_dir / "config.json"
+        config_path.write_text(json.dumps({"timeout": 100}))
+
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "env-secret-key")
+        monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://custom.api/")
+
+        config = ClientConfig.load(config_path)
+
+        assert config.minimax_api_key == "env-secret-key"
+        assert config.minimax_api_url == "https://custom.api/"
+
+
+class TestClientConfigSaveDefaultPath:
+    """Test save() calls get_default_config_path() when no path given (line 54)."""
+
+    def test_save_with_no_path_uses_default_path(self, temp_dir, monkeypatch):
+        """Line 54: save() with no path calls get_default_config_path()."""
+        fake_path = temp_dir / "default_config.json"
+
+        original_get_default = ClientConfig.get_default_config_path
+        ClientConfig.get_default_config_path = classmethod(lambda cls: fake_path)
+
+        try:
+            config = ClientConfig(timeout=555)
+            config.save()  # no path → uses get_default_config_path()
+            assert fake_path.exists()
+        finally:
+            ClientConfig.get_default_config_path = original_get_default
+
 
 class TestClientConfigLoad:
     """Test ClientConfig.load()."""
@@ -206,3 +268,50 @@ class TestPairingInfoSave:
 
         assert loaded.code == original.code
         assert loaded.user_id == original.user_id
+
+
+class TestPairingInfoGetDefaultPathWindows:
+    """Test PairingInfo.get_default_path() Windows branch (line 102)."""
+
+    def test_windows_path(self):
+        """Line 102: Windows branch uses APPDATA environment variable."""
+        appdata_val = "C:\\Users\\Alice"
+        fake_base = Path(appdata_val)
+        with patch("os.name", "nt"):
+            with patch.dict("os.environ", {"APPDATA": appdata_val}, clear=False):
+                with patch("client.config.Path", return_value=fake_base):
+                    path = PairingInfo.get_default_path()
+                    assert str(path).replace("\\", "/") == "C:/Users/Alice/cc-claw/pairing.json"
+
+
+class TestPairingInfoDefaultPathCalls:
+    """Test PairingInfo.load/save call get_default_path() with no args (lines 81, 92)."""
+
+    def test_load_with_no_path_uses_default(self, temp_dir):
+        """Line 81: load() with no path calls get_default_path()."""
+        fake_path = temp_dir / "pairing.json"
+        fake_path.write_text(json.dumps({"code": "FROM_DEFAULT", "user_id": 123}))
+
+        original = PairingInfo.get_default_path
+        PairingInfo.get_default_path = staticmethod(lambda: fake_path)
+
+        try:
+            info = PairingInfo.load()
+            assert info.code == "FROM_DEFAULT"
+        finally:
+            PairingInfo.get_default_path = original
+
+    def test_save_with_no_path_uses_default(self, temp_dir):
+        """Line 92: save() with no path calls get_default_path()."""
+        fake_path = temp_dir / "pairing.json"
+
+        original = PairingInfo.get_default_path
+        PairingInfo.get_default_path = staticmethod(lambda: fake_path)
+
+        try:
+            info = PairingInfo(code="TO_DEFAULT")
+            info.save()  # no path → uses get_default_path()
+            assert fake_path.exists()
+        finally:
+            PairingInfo.get_default_path = original
+
