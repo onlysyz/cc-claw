@@ -23,7 +23,6 @@ class MemoryEntry:
     importance: int  # 1-5, higher = more important to retain
     tags: List[str] = field(default_factory=list)
     source: str = "claude"  # 'claude', 'user', 'system', 'task'
-    embeddings: Optional[List[float]] = None  # For future semantic search
 
 
 class PersistentMemory:
@@ -32,7 +31,7 @@ class PersistentMemory:
     Features:
     - Automatic context snapshots before/after task execution
     - Key decisions and learnings stored permanently
-    - Semantic search over memory entries
+    - Keyword search over memory entries
     - Automatic summarization of old entries when limit reached
     - Session continuity - resumes where left off
     """
