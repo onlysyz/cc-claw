@@ -531,37 +531,14 @@ class CCClawDaemon:
     async def _on_hook_post_tool_use(self, task_id: Optional[str], payload: dict):
         """Handle PostToolUse hook callback — fires after every tool call succeeds.
 
-        Used for real-time progress tracking. Sends a brief notification via
-        WebSocket so the user can see what's happening during a long task.
+        Tool-level notifications are skipped to avoid spam. Task completion
+        notifications are sent via the Stop hook instead.
         """
         if not task_id:
             return
 
         tool_name = payload.get("tool_name", "")
-        tool_input = payload.get("tool_input", {})
-        tool_response = payload.get("tool_response", {})
-
-        logger.info(f"[HOOK:PostToolUse] task_id={task_id}, tool={tool_name}")
-
-        # Build a concise progress message
-        msg = self._build_progress_message(tool_name, tool_input, tool_response)
-        if not msg:
-            return
-
-        # Look up the task to include its description
-        task_desc = ""
-        for t in self.profile.tasks:
-            if t.id == task_id:
-                task_desc = t.description[:40]
-                break
-
-        notification = f"🔧 {msg}"
-        if task_desc:
-            notification = f"🔧 [{task_desc}] {msg}"
-
-        # Send real-time update to user via WebSocket
-        if self.ws_manager and self.ws_manager.is_connected:
-            await self.ws_manager.send_notification(notification)
+        logger.debug(f"[HOOK:PostToolUse] task_id={task_id}, tool={tool_name}")
 
     def _build_progress_message(self, tool_name: str, tool_input: dict, tool_response: dict) -> str:
         """Build a human-readable progress message from a tool call result."""
