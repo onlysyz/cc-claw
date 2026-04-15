@@ -113,6 +113,11 @@ class MessageHandler:
                 await self._handle_resume_command(message_id, lark_open_id)
                 return
 
+            # Check for /reset command
+            if content.strip() == "/reset":
+                await self._handle_reset_command(message_id, lark_open_id)
+                return
+
             # Check for /goals command
             if content.strip() == "/goals":
                 await self._handle_goals_command(message_id, lark_open_id)
@@ -393,6 +398,23 @@ class MessageHandler:
         self.autonomous_mode = True
         logger.info("Autonomous mode RESUMED")
         response = "▶️ Autonomous mode resumed. CC-Claw is working for you again."
+        await self.ws.send_message(response, message_id, [], lark_open_id)
+
+    async def _handle_reset_command(self, message_id: str, lark_open_id: str = None):
+        """Handle /reset command — clear all profile, goals, tasks and restart onboarding."""
+        self.profile.reset_all()
+        self.autonomous_mode = False
+        if self.queue_manager:
+            # Drain the queue
+            while not self.queue_manager.queue.is_empty:
+                qt = self.queue_manager.queue.dequeue()
+                if qt:
+                    logger.info(f"Dropping queued task: {qt.task.description[:50]}")
+        logger.info("Profile reset — onboarding will restart")
+        response = (
+            "🔄 已清空所有数据，onboarding 重置。\n"
+            "发送你的职业、现状、短期目标和'更好'的定义，重新开始。"
+        )
         await self.ws.send_message(response, message_id, [], lark_open_id)
 
     async def _handle_goals_command(self, message_id: str, lark_open_id: str = None):

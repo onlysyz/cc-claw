@@ -213,6 +213,12 @@ class ProfileManager:
     def is_onboarding_complete(self) -> bool:
         return self.profile and self.profile.onboarding_completed
 
+    def reset_all(self):
+        """Clear all goals, tasks, and profile to start fresh onboarding."""
+        self._init_empty()
+        self._save()
+        logger.info("Profile fully reset — onboarding will restart on next setup")
+
     # --- Goals ---
 
     def add_goal(self, description: str) -> Goal:
