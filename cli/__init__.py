@@ -242,6 +242,50 @@ def cmd_unpair(args):
     print("Device unpaired successfully")
 
 
+def cmd_uninstall(args):
+    """Remove all local configuration, data, and hooks."""
+    import shutil
+    from client.hook_config import remove_hooks
+
+    config_dir = Path.home() / ".config" / "cc-claw"
+    cache_dir = Path.home() / ".cache" / "cc-claw"
+
+    if not args.yes:
+        print("=== CC-Claw Uninstall ===\n")
+        print("This will remove:")
+        items = []
+        if config_dir.exists():
+            items.append(f"  - {config_dir}/ (config, profile, pairing)")
+        if cache_dir.exists():
+            items.append(f"  - {cache_dir}/ (cache)")
+        items.append(f"  - Claude Code hooks from ~/.claude/settings.json")
+        print("\n".join(items))
+        print("\nType 'yes' to confirm: ", end="")
+        if input().strip() != "yes":
+            print("Cancelled.")
+            return
+
+    # Remove hooks from Claude Code settings
+    try:
+        remove_hooks()
+        print("✓ Removed Claude Code hooks")
+    except Exception as e:
+        print(f"⚠ Could not remove hooks: {e}")
+
+    # Remove config directory
+    if config_dir.exists():
+        shutil.rmtree(config_dir)
+        print(f"✓ Removed {config_dir}")
+
+    # Remove cache directory
+    if cache_dir.exists():
+        shutil.rmtree(cache_dir)
+        print(f"✓ Removed {cache_dir}")
+
+    print("\nUninstall complete. To reinstall, run:")
+    print("  pip install cc-claw && cc-claw start")
+
+
 def cmd_config(args):
     """View or modify configuration"""
     config = ClientConfig.load()
@@ -484,6 +528,12 @@ def main():
     # unpair
     parser_unpair = subparsers.add_parser("unpair", help="Unpair device")
     parser_unpair.set_defaults(func=cmd_unpair)
+
+    # uninstall
+    parser_uninstall = subparsers.add_parser("uninstall", help="Remove all local config, data, and hooks")
+    parser_uninstall.add_argument("--yes", "-y", action="store_true",
+                                 help="Skip confirmation prompt")
+    parser_uninstall.set_defaults(func=cmd_uninstall)
 
     # config
     parser_config = subparsers.add_parser("config", help="View or modify configuration")
