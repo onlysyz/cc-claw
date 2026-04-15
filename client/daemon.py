@@ -286,10 +286,6 @@ class CCClawDaemon:
                         await asyncio.sleep(5)
                         continue
 
-                if not goal:
-                    await asyncio.sleep(5)
-                    continue
-
                 logger.info(f"Working on goal: {goal.description}")
 
                 # Check if goal needs decomposition

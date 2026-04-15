@@ -2403,3 +2403,394 @@ class TestAutonomousRunnerSuggestGoalPath:
         assert "No goal suggested, waiting" in caplog.text
         # _suggest_new_goal called 6 times: loop_count=10,20,30,40,50,60
         assert daemon._suggest_new_goal.call_count == 6
+
+
+# ---------------------------------------------------------------------------
+# Hook handler tests
+# ---------------------------------------------------------------------------
+
+class TestOnHookStop:
+    def test_none_task_id_logs_warning_and_returns(self, caplog):
+        config = ClientConfig()
+        daemon = CCClawDaemon(config)
+        daemon.profile = MagicMock()
+
+        import logging
+        with caplog.at_level(logging.WARNING):
+            result = asyncio.get_event_loop().run_until_complete(
+                daemon._on_hook_stop(None, {})
+            )
+
+        assert "Stop hook received without task_id" in caplog.text
+
+    def test_unknown_task_id_logs_warning_and_returns(self, caplog):
+        config = ClientConfig()
+        daemon = CCClawDaemon(config)
+        task = MagicMock()
+        task.id = "task-123"
+        daemon.profile = MagicMock(spec=daemon.profile.__class__)
+        daemon.profile.tasks = [task]
+
+        import logging
+        with caplog.at_level(logging.WARNING):
+            asyncio.get_event_loop().run_until_complete(
+                daemon._on_hook_stop("unknown-task-id", {"summary": "done"})
+            )
+
+        assert "unknown task_id: unknown-task-id" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_task_executing_completes_and_notifies_ws(self):
+        config = ClientConfig()
+        daemon = CCClawDaemon(config)
+
+        goal = MagicMock()
+        goal.id = "goal-1"
+        task = MagicMock()
+        task.id = "task-1"
+        task.goal_id = "goal-1"
+        task.status = TaskStatus.EXECUTING
+        task.description = "Test task"
+
+        daemon.profile = MagicMock()
+        daemon.profile.tasks = [task]
+        daemon.profile.goals = [goal]
+        daemon.profile.get_tasks_for_goal = MagicMock(return_value=[task])
+        daemon.profile.complete_task = MagicMock()
+
+        ws_mock = MagicMock()
+        ws_mock.is_connected = True
+        ws_mock.send_notification = AsyncMock()
+        daemon.ws_manager = ws_mock
+
+        await daemon._on_hook_stop("task-1", {
+            "summary": "Task completed successfully",
+            "session_id": "sess-1",
+            "transcript_path": "/tmp/transcript"
+        })
+
+        daemon.profile.complete_task.assert_called_once_with(
+            "task-1", result_summary="Task completed successfully"
+        )
+        ws_mock.send_notification.assert_called_once()
+        msg = ws_mock.send_notification.call_args[0][0]
+        assert "✅ Task done" in msg
+        assert "Test task" in msg
+
+    @pytest.mark.asyncio
+    async def test_task_not_executing_ignores(self, caplog):
+        config = ClientConfig()
+        daemon = CCClawDaemon(config)
+
+        task = MagicMock()
+        task.id = "task-1"
+        task.status = TaskStatus.COMPLETED
+        task.description = "Already done"
+
+        daemon.profile = MagicMock()
+        daemon.profile.tasks = [task]
+        daemon.profile.complete_task = MagicMock()
+        daemon.ws_manager = None
+
+        import logging
+        with caplog.at_level(logging.INFO):
+            await daemon._on_hook_stop("task-1", {"summary": "done"})
+
+        daemon.profile.complete_task.assert_not_called()
+        assert "already status=completed" in caplog.text
+
+
+class TestOnHookPostToolUse:
+    def test_none_task_id_returns_early(self):
+        config = ClientConfig()
+        daemon = CCClawDaemon(config)
+        daemon.profile = MagicMock()
+
+        result = asyncio.get_event_loop().run_until_complete(
+            daemon._on_hook_post_tool_use(None, {"tool_name": "Bash"})
+        )
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_empty_tool_name_returns_early(self):
+        """覆盖 549：空 tool_name 时 _build_progress_message 返回空，_on_hook_post_tool_use 早期返回"""
+        config = ClientConfig()
+        daemon = CCClawDaemon(config)
+        daemon.profile = MagicMock()
+        daemon.profile.tasks = []
+        daemon.ws_manager = None
+
+        # _build_progress_message("", {}, {}) → "" → not msg → return
+        # Should not raise
+        await daemon._on_hook_post_tool_use("task-1", {"tool_name": ""})
+
+    def test_build_progress_message_bash_truncates_long_command(self):
+        config = ClientConfig()
+        daemon = CCClawDaemon(config)
+
+        msg = daemon._build_progress_message(
+            "Bash",
+            {"command": "python -c 'import sys; print(sys.version)'"},
+            {}
+        )
+        assert msg == "Ran: python -c 'import sys; print(sys.version)'"
+
+        long_cmd = "python " + "a" * 80
+        msg_long = daemon._build_progress_message("Bash", {"command": long_cmd}, {})
+        # "Ran: " (5) + up to 57 cmd chars + "..." (3) = max 65
+        assert len(msg_long) <= 65
+        assert msg_long.endswith("...")
+
+    def test_build_progress_message_write_read_edit(self):
+        config = ClientConfig()
+        daemon = CCClawDaemon(config)
+
+        assert daemon._build_progress_message("Write", {"file_path": "/a/b/c.py"}, {}) == "Wrote: c.py"
+        assert daemon._build_progress_message("Read", {"file_path": "/x/y.py"}, {}) == "Read: y.py"
+        assert daemon._build_progress_message("Edit", {"file_path": "/foo/bar.py"}, {}) == "Edited: bar.py"
+        # empty path falls back to tool name
+        assert daemon._build_progress_message("Write", {}, {}) == "Write"
+
+    def test_build_progress_message_glob_grep_webfetch_task(self):
+        config = ClientConfig()
+        daemon = CCClawDaemon(config)
+
+        assert daemon._build_progress_message("Glob", {"pattern": "**/*.py"}, {}) == "Glob: **/*.py"
+        assert daemon._build_progress_message("Grep", {"pattern": "TODO.*fix"}, {}) == "Grep: TODO.*fix"
+        assert daemon._build_progress_message("WebFetch", {"url": "https://example.com/api"}, {}) == "WebFetch: https://example.com/api"
+        assert daemon._build_progress_message("Task", {"description": "Write tests"}, {}) == "Task: Write tests"
+        # long pattern/truncate
+        long_pattern = "x" * 60
+        msg = daemon._build_progress_message("Grep", {"pattern": long_pattern}, {})
+        assert len(msg) <= 46
+        assert msg.endswith("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")
+
+    def test_build_progress_message_empty_returns_empty_string(self):
+        config = ClientConfig()
+        daemon = CCClawDaemon(config)
+        # Empty tool_name falls through to else → returns tool_name (empty)
+        assert daemon._build_progress_message("", {}, {}) == ""
+
+    def test_build_progress_message_unknown_returns_tool_name(self):
+        config = ClientConfig()
+        daemon = CCClawDaemon(config)
+        assert daemon._build_progress_message("SomeUnknownTool", {}, {}) == "SomeUnknownTool"
+
+    @pytest.mark.asyncio
+    async def test_sends_notification_via_ws(self):
+        config = ClientConfig()
+        daemon = CCClawDaemon(config)
+
+        task = MagicMock()
+        task.id = "task-1"
+        task.description = "My test task"
+        daemon.profile = MagicMock()
+        daemon.profile.tasks = [task]
+
+        ws_mock = MagicMock()
+        ws_mock.is_connected = True
+        ws_mock.send_notification = AsyncMock()
+        daemon.ws_manager = ws_mock
+
+        await daemon._on_hook_post_tool_use("task-1", {
+            "tool_name": "Bash",
+            "tool_input": {"command": "pytest"},
+            "tool_response": {}
+        })
+
+        ws_mock.send_notification.assert_called_once()
+        msg = ws_mock.send_notification.call_args[0][0]
+        assert "🔧" in msg
+        assert "My test task" in msg
+        assert "Ran: pytest" in msg
+
+    @pytest.mark.asyncio
+    async def test_no_ws_manager_skips_notification(self):
+        config = ClientConfig()
+        daemon = CCClawDaemon(config)
+        daemon.profile = MagicMock()
+        daemon.profile.tasks = []
+        daemon.ws_manager = None
+
+        # Should not raise
+        await daemon._on_hook_post_tool_use("task-1", {
+            "tool_name": "Bash",
+            "tool_input": {"command": "ls"},
+            "tool_response": {}
+        })
+
+
+class TestOnHookNotification:
+    @pytest.mark.asyncio
+    async def test_forwards_notification_via_ws(self):
+        config = ClientConfig()
+        daemon = CCClawDaemon(config)
+        daemon.profile = MagicMock()
+        daemon.profile.tasks = []
+
+        ws_mock = MagicMock()
+        ws_mock.is_connected = True
+        ws_mock.send_notification = AsyncMock()
+        daemon.ws_manager = ws_mock
+
+        await daemon._on_hook_notification("task-1", {
+            "title": "Permission needed",
+            "message": "Allow read access?",
+            "notification_type": "permission_prompt",
+            "session_id": "sess-1"
+        })
+
+        ws_mock.send_notification.assert_called_once()
+        msg = ws_mock.send_notification.call_args[0][0]
+        assert "🔔" in msg
+        assert "Permission needed" in msg
+
+    @pytest.mark.asyncio
+    async def test_notification_with_task_context(self):
+        """task_id 匹配时附加 task description 到通知开头（覆盖 638-640）"""
+        config = ClientConfig()
+        daemon = CCClawDaemon(config)
+
+        task = MagicMock()
+        task.id = "task-1"
+        task.description = "Fix login bug"  # <= 40 chars, no truncation
+        daemon.profile = MagicMock()
+        daemon.profile.tasks = [task]
+
+        ws_mock = MagicMock()
+        ws_mock.is_connected = True
+        ws_mock.send_notification = AsyncMock()
+        daemon.ws_manager = ws_mock
+
+        await daemon._on_hook_notification("task-1", {
+            "title": "Error",
+            "message": "Auth failed",
+            "notification_type": "auth"
+        })
+
+        ws_mock.send_notification.assert_called_once()
+        msg = ws_mock.send_notification.call_args[0][0]
+        assert "[Fix login bug]" in msg
+        assert "Error" in msg
+
+    @pytest.mark.asyncio
+    async def test_permission_prompt_logs_prominently(self, caplog):
+        config = ClientConfig()
+        daemon = CCClawDaemon(config)
+        daemon.profile = MagicMock()
+        daemon.profile.tasks = []
+        daemon.ws_manager = None
+
+        import logging
+        with caplog.at_level(logging.INFO):
+            await daemon._on_hook_notification(None, {
+                "title": "Perm",
+                "message": "Allow X?",
+                "notification_type": "permission_prompt"
+            })
+
+        assert "[HOOK:Permission] Perm: Allow X?" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_no_ws_manager_uses_fallback_notification_text(self, caplog):
+        config = ClientConfig()
+        daemon = CCClawDaemon(config)
+        daemon.profile = MagicMock()
+        daemon.profile.tasks = []
+        daemon.ws_manager = None
+
+        # When ws_manager is None, notification is not forwarded (no logging in that path)
+        # This test just verifies no exception is raised
+        import logging
+        with caplog.at_level(logging.INFO):
+            await daemon._on_hook_notification("task-1", {
+                "message": "Build complete",
+                "notification_type": "idle_prompt"
+            })
+
+        # Nothing logged to caplog when ws_manager is None; notification is silently dropped
+        # (only permission_prompt type logs)
+        assert "idle_prompt" in caplog.text  # [HOOK:Notification] log line
+
+    @pytest.mark.asyncio
+    async def test_notification_text_title_only(self, caplog):
+        config = ClientConfig()
+        daemon = CCClawDaemon(config)
+        daemon.profile = MagicMock()
+        daemon.profile.tasks = []
+        ws_mock = MagicMock()
+        ws_mock.is_connected = True
+        ws_mock.send_notification = AsyncMock()
+        daemon.ws_manager = ws_mock
+
+        await daemon._on_hook_notification(None, {
+            "title": "Done",
+            "notification_type": "system"
+        })
+
+        ws_mock.send_notification.assert_called_once()
+        msg = ws_mock.send_notification.call_args[0][0]
+        assert "🔔" in msg
+        assert "Done" in msg
+
+    @pytest.mark.asyncio
+    async def test_notification_text_type_only(self, caplog):
+        config = ClientConfig()
+        daemon = CCClawDaemon(config)
+        daemon.profile = MagicMock()
+        daemon.profile.tasks = []
+        ws_mock = MagicMock()
+        ws_mock.is_connected = True
+        ws_mock.send_notification = AsyncMock()
+        daemon.ws_manager = ws_mock
+
+        await daemon._on_hook_notification(None, {
+            "notification_type": "auth"
+        })
+
+        ws_mock.send_notification.assert_called_once()
+        msg = ws_mock.send_notification.call_args[0][0]
+        assert "🔔" in msg
+        assert "[auth]" in msg
+
+
+class TestStop:
+    @pytest.mark.asyncio
+    async def test_stop_calls_hook_server_stop_and_remove_hooks(self):
+        config = ClientConfig()
+        daemon = CCClawDaemon(config)
+
+        hook_server_mock = MagicMock()
+        hook_server_mock.is_running = True
+        hook_server_mock.stop = AsyncMock()
+        daemon.hook_server = hook_server_mock
+
+        daemon.ws_manager = MagicMock()
+        daemon.ws_manager.disconnect = AsyncMock()
+        daemon._token_checker_task = MagicMock()
+        daemon._autonomous_runner_task = MagicMock()
+
+        with patch("client.daemon.remove_hooks") as remove_mock:
+            await daemon.stop()
+            remove_mock.assert_called_once()
+
+        hook_server_mock.stop.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_stop_cancels_task_checker_task(self):
+        """覆盖 767：_task_checker_task 存在时调用 cancel()"""
+        config = ClientConfig()
+        daemon = CCClawDaemon(config)
+
+        task_checker_mock = MagicMock()
+        daemon._task_checker_task = task_checker_mock
+        daemon._token_checker_task = None
+        daemon._autonomous_runner_task = None
+        daemon.hook_server = None
+        daemon.ws_manager = MagicMock()
+        daemon.ws_manager.disconnect = AsyncMock()
+
+        with patch("client.daemon.remove_hooks"):
+            await daemon.stop()
+
+        task_checker_mock.cancel.assert_called_once()
