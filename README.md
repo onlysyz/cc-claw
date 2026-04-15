@@ -72,154 +72,49 @@
 - Claude Code CLI ([安装指南](https://docs.anthropic.com/en/docs/claude-code))
 - 网络连接（用于调用 Claude API）
 
-### 安装
+### 安装（3 步）
 
 ```bash
-# 从 PyPI 安装
+# 1. 安装
 pip install cc-claw
 
-# 或从源码安装
-git clone https://github.com/onlysyz/cc-claw.git
-cd cc-claw
-pip install -e .
+# 2. 启动（首次运行自动引导配置）
+cc-claw start
+# → 输入服务器地址 → Telegram /pair 验证码 → 自动启动
+
+# 3. 发消息给机器人设置目标
+/goal 完成用户登录功能
 ```
 
-### 飞书（Feishu）本地安装最佳实践
-
-飞书集成让你可以在 Lark/Feishu 机器人中直接与 CC-Claw 对话。
-
-#### 1. 环境准备
-
-```bash
-# 克隆项目
-git clone https://github.com/onlysyz/cc-claw.git
-cd cc-claw
-
-# 创建虚拟环境
-python3 -m venv venv
-source venv/bin/activate  # Linux/macOS
-# or: venv\Scripts\activate  # Windows
-
-# 安装依赖
-pip install -e .
-```
-
-#### 2. 配置飞书机器人
-
-在 [飞书开放平台](https://open.feishu.cn/app) 创建企业自建应用，获取以下信息：
-
-- **App ID**: `cli_xxxxxxxx`
-- **App Secret**: `xxxxxxxxxxxxxxxx`
-- **Bot Feature** → 开启「机器人」能力
-
-在「事件订阅」中添加以下订阅：
-- `im.message.receive_v1`（接收消息）
-
-在「权限管理」中添加：
-- `im:message`
-- `im:message.group_at_msg`
-- `im:message.p2p_msg`
-
-#### 3. 配置 .env 文件
-
-```bash
-cp .env.example .env
-```
-
-编辑 `.env`：
-
-```ini
-# 服务器配置
-HOST=0.0.0.0
-API_PORT=4000
-WS_PORT=4001
-
-# 飞书配置
-LARK_APP_ID=cli_xxxxxxxx
-LARK_APP_SECRET=xxxxxxxxxxxxxxxx
-LARK_BOT_NAME=CC-Claw
-
-# MiniMax API（用于目标分解，省 Token）
-ANTHROPIC_API_KEY=sk-xxxxxxxx
-ANTHROPIC_BASE_URL=https://api.minimaxi.com/anthropic
-
-# Claude Code 配置（在客户端设置）
-# CLAUDE_PATH=/usr/local/bin/claude
-```
-
-#### 4. 启动服务器
-
-```bash
-# 启动 API + WebSocket 服务器
-python run_server.py
-
-# 服务器日志显示 "WebSocket server started on 0.0.0.0:4001" 表示成功
-```
-
-#### 5. 启动客户端（配对设备）
-
-```bash
-# 先配置服务器地址
-python3 -m cli config --set server_ws_url=ws://localhost:4001
-python3 -m cli config --set server_api_url=http://localhost:4000
-
-# 设置工作目录（Claude Code 在此目录下工作）
-python3 -m cli config --set working_dir=/path/to/your/project
-
-# 设置权限模式（跳过授权确认，否则 Claude 会等待交互）
-python3 -m cli config --set permission_mode=bypassPermissions
-
-# 然后进行配对
-python3 -m cli pair
-
-# 6. 启动守护进程
-python3 -m cli start
-```
-
-#### 6. 在飞书中使用
-
-给机器人发送命令：
-
-| 命令 | 描述 |
-|------|------|
-| `/start` | 开始使用 + 引导设置 |
-| `/goal <目标>` | 设置新目标（如：`/goal 帮我写一个博客系统`） |
-| `/progress` | 查看进度和 Token 统计 |
-| `/pause` | 暂停自主执行 |
-| `/resume` | 恢复自主执行 |
-| `/tasks` | 查看任务队列 |
-| `/goals` | 管理目标 |
-| `/setgoal <id>` | 切换工作目标 |
-| `/newgoal <描述>` | 创建新目标 |
-| `/deltask <id>` | 删除任务 |
-| `/help` | 帮助 |
-
-#### 9. 常见问题排查
-
-```bash
-# 查看服务器日志
-tail -f logs/server.log
-
-# 查看客户端日志
-python3 -m cli status
-
-# 重启服务
-pkill -f run_server.py && python3 -m server.run &
-```
+**后续启动无需任何配置**，直接 `cc-claw start` 即可。
 
 ---
 
-### 设置第一个目标
+### 完整命令
 
-```
-在 飞书/Telegram 中发送：
-/goal  实现用户认证系统
+| 命令 | 描述 |
+|------|------|
+| `cc-claw start` | 启动（未配对时自动引导） |
+| `cc-claw install --server-url=<url>` | 一键安装 + 配置 + 配对 |
+| `cc-claw status` | 查看连接状态 |
+| `cc-claw uninstall --yes` | 卸载所有本地数据 |
 
-CC-Claw 会自动：
-1. 询问你的职业和现状
-2. 分解目标为具体任务
-3. 开始自主执行
-```
+### 机器人命令
+
+| 命令 | 描述 |
+|------|------|
+| `/goal <目标>` | 设置目标并开始执行 |
+| `/progress` | 查看进度和 Token 统计 |
+| `/goals` | 管理所有目标 |
+| `/pause` | 暂停自主执行 |
+| `/resume` | 恢复自主执行 |
+| `/reset` | 清空数据，重新开始 onboarding |
+
+---
+
+### 自行部署服务端
+
+如需自建服务端，请参考 [DEPLOY.md](./DEPLOY.md)。
 
 ---
 
@@ -228,13 +123,9 @@ CC-Claw 会自动：
 ### 基本命令
 
 ```bash
-python3 -m cli start        # 启动守护进程
-python3 -m cli status       # 查看连接状态
-python3 -m cli progress     # 查看目标进度
-python3 -m cli pause        # 暂停自主模式
-python3 -m cli resume       # 恢复自主模式
-python3 -m cli goals        # 查看所有目标
-python3 -m cli tasks        # 查看任务队列
+cc-claw start        # 启动守护进程
+cc-claw status       # 查看连接状态
+cc-claw uninstall    # 卸载所有本地数据
 ```
 
 ### 机器人命令
