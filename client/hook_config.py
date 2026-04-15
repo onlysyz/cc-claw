@@ -73,34 +73,50 @@ def inject_hooks(hook_port: Optional[int] = None) -> bool:
     cc_claw_hooks = {
         "Stop": [
             {
-                "type": "http",
-                "url": f"{base_url}/hooks/stop?task_id=$CC_CLAW_TASK_ID",
-                "timeout": 30,
-                "allowedEnvVars": ["CC_CLAW_TASK_ID"],
+                "hooks": [
+                    {
+                        "type": "http",
+                        "url": f"{base_url}/hooks/stop?task_id=$CC_CLAW_TASK_ID",
+                        "timeout": 30,
+                        "allowedEnvVars": ["CC_CLAW_TASK_ID"],
+                    }
+                ]
             }
         ],
         "PostToolUse": [
             {
-                "type": "http",
-                "url": f"{base_url}/hooks/post-tool-use?task_id=$CC_CLAW_TASK_ID",
-                "timeout": 10,
-                "allowedEnvVars": ["CC_CLAW_TASK_ID"],
+                "hooks": [
+                    {
+                        "type": "http",
+                        "url": f"{base_url}/hooks/post-tool-use?task_id=$CC_CLAW_TASK_ID",
+                        "timeout": 10,
+                        "allowedEnvVars": ["CC_CLAW_TASK_ID"],
+                    }
+                ]
             }
         ],
         "PreToolUse": [
             {
-                "type": "http",
-                "url": f"{base_url}/hooks/pre-tool-use?task_id=$CC_CLAW_TASK_ID",
-                "timeout": 10,
-                "allowedEnvVars": ["CC_CLAW_TASK_ID"],
+                "hooks": [
+                    {
+                        "type": "http",
+                        "url": f"{base_url}/hooks/pre-tool-use?task_id=$CC_CLAW_TASK_ID",
+                        "timeout": 10,
+                        "allowedEnvVars": ["CC_CLAW_TASK_ID"],
+                    }
+                ]
             }
         ],
         "Notification": [
             {
-                "type": "http",
-                "url": f"{base_url}/hooks/notification?task_id=$CC_CLAW_TASK_ID",
-                "timeout": 10,
-                "allowedEnvVars": ["CC_CLAW_TASK_ID"],
+                "hooks": [
+                    {
+                        "type": "http",
+                        "url": f"{base_url}/hooks/notification?task_id=$CC_CLAW_TASK_ID",
+                        "timeout": 10,
+                        "allowedEnvVars": ["CC_CLAW_TASK_ID"],
+                    }
+                ]
             }
         ],
     }
@@ -117,9 +133,14 @@ def inject_hooks(hook_port: Optional[int] = None) -> bool:
         if event_name not in settings["hooks"]:
             settings["hooks"][event_name] = []
         # Append cc-claw hooks that aren't already registered
-        existing_urls = {h.get("url", "") for h in settings["hooks"][event_name]}
+        existing_urls = {
+            inner_h.get("url", "")
+            for h in settings["hooks"][event_name]
+            for inner_h in h.get("hooks", [])
+        }
         for hook in hooks:
-            if hook["url"] not in existing_urls:
+            hook_url = hook["hooks"][0].get("url", "") if hook.get("hooks") else ""
+            if hook_url not in existing_urls:
                 settings["hooks"][event_name].append(hook)
 
     _save_settings(settings)
@@ -148,7 +169,11 @@ def remove_hooks() -> bool:
         original_len = len(hooks[event_name])
         hooks[event_name] = [
             h for h in hooks[event_name]
-            if not any(marker in h.get("url", "") for marker in cc_claw_markers)
+            if not any(
+                marker in inner_h.get("url", "")
+                for inner_h in h.get("hooks", [])
+                for marker in cc_claw_markers
+            )
         ]
         if len(hooks[event_name]) != original_len:
             changed = True
@@ -179,6 +204,7 @@ def is_hooks_injected() -> bool:
     ]
     for event_hooks in hooks.values():
         for h in event_hooks:
-            if any(marker in h.get("url", "") for marker in cc_claw_markers):
-                return True
+            for inner_h in h.get("hooks", []):
+                if any(marker in inner_h.get("url", "") for marker in cc_claw_markers):
+                    return True
     return False

@@ -162,9 +162,10 @@ class TestInjectHooks:
         assert result is True
         loaded = json.loads(path.read_text())
         hook_urls = [
-            h["url"]
+            inner_h["url"]
             for event_hooks in loaded.get("hooks", {}).values()
             for h in event_hooks
+            for inner_h in h.get("hooks", [])
         ]
         assert any("7777" in u for u in hook_urls)
         assert any("/hooks/stop" in u for u in hook_urls)
@@ -180,14 +181,19 @@ class TestInjectHooks:
             hook_config.inject_hooks(hook_port=3456)
 
         loaded = json.loads(path.read_text())
-        stop_count = sum(1 for h in loaded["hooks"]["Stop"] if "/hooks/stop" in h["url"])
+        stop_count = sum(
+            1
+            for h in loaded["hooks"]["Stop"]
+            for inner_h in h.get("hooks", [])
+            if "/hooks/stop" in inner_h.get("url", "")
+        )
         assert stop_count == 1
 
     def test_preserves_existing_hooks(self, tmp_path):
         existing_settings = {
             "hooks": {
                 "Stop": [
-                    {"type": "http", "url": "http://other.com/stop", "timeout": 5}
+                    {"hooks": [{"type": "http", "url": "http://other.com/stop", "timeout": 5}]}
                 ]
             },
             "someOtherKey": {"keep": "this"},
@@ -198,7 +204,7 @@ class TestInjectHooks:
 
         loaded = json.loads(path.read_text())
         # Both existing and cc-claw should be present
-        urls = [h["url"] for h in loaded["hooks"]["Stop"]]
+        urls = [inner_h["url"] for h in loaded["hooks"]["Stop"] for inner_h in h.get("hooks", [])]
         assert "http://other.com/stop" in urls
         assert any("127.0.0.1:3456" in u for u in urls)
         # Other keys preserved
@@ -217,7 +223,7 @@ class TestInjectHooks:
         existing_settings = {
             "hooks": {
                 "Stop": [
-                    {"type": "http", "url": "http://other.com/stop"}
+                    {"hooks": [{"type": "http", "url": "http://other.com/stop"}]}
                 ]
             }
         }
@@ -226,7 +232,7 @@ class TestInjectHooks:
             hook_config.inject_hooks(hook_port=3456)
 
         loaded = json.loads(path.read_text())
-        stop_urls = [h["url"] for h in loaded["hooks"]["Stop"]]
+        stop_urls = [inner_h["url"] for h in loaded["hooks"]["Stop"] for inner_h in h.get("hooks", [])]
         assert len(stop_urls) == 2  # existing + cc-claw
 
     def test_creates_hooks_section_if_missing(self, tmp_path):
@@ -244,14 +250,15 @@ class TestInjectHooks:
 
 class TestRemoveHooks:
     def test_removes_all_cc_claw_hooks(self, tmp_path):
+        # New format: hooks wrapped in inner array
         settings = {
             "hooks": {
                 "Stop": [
-                    {"url": "http://127.0.0.1:3456/hooks/stop"},
-                    {"url": "http://other.com/stop"},
+                    {"hooks": [{"url": "http://127.0.0.1:3456/hooks/stop"}]},
+                    {"hooks": [{"url": "http://other.com/stop"}]},
                 ],
                 "PostToolUse": [
-                    {"url": "http://127.0.0.1:3456/hooks/post-tool-use"},
+                    {"hooks": [{"url": "http://127.0.0.1:3456/hooks/post-tool-use"}]},
                 ],
             }
         }
@@ -261,21 +268,21 @@ class TestRemoveHooks:
 
         assert result is True
         loaded = json.loads(path.read_text())
-        stop_urls = [h["url"] for h in loaded["hooks"]["Stop"]]
+        stop_urls = [inner_h["url"] for h in loaded["hooks"]["Stop"] for inner_h in h.get("hooks", [])]
         assert len(stop_urls) == 1
         assert stop_urls[0] == "http://other.com/stop"
         # PostToolUse should be removed entirely (empty)
         assert "PostToolUse" not in loaded["hooks"]
 
     def test_no_change_when_no_cc_claw_hooks(self, tmp_path):
-        settings = {"hooks": {"Stop": [{"url": "http://other.com/stop"}]}}
+        settings = {"hooks": {"Stop": [{"hooks": [{"url": "http://other.com/stop"}]}]}}
         path = write_settings(tmp_path, settings)
         with patch.object(hook_config, "SETTINGS_PATH", path):
             result = hook_config.remove_hooks()
 
         assert result is True
         loaded = json.loads(path.read_text())
-        assert loaded["hooks"]["Stop"][0]["url"] == "http://other.com/stop"
+        assert loaded["hooks"]["Stop"][0]["hooks"][0]["url"] == "http://other.com/stop"
 
     def test_true_when_no_settings_file(self, tmp_path):
         nonexistent = tmp_path / "nonexistent.json"
@@ -287,7 +294,7 @@ class TestRemoveHooks:
     def test_removes_empty_hooks_dict(self, tmp_path):
         settings = {
             "hooks": {
-                "Stop": [{"url": "http://127.0.0.1:3456/hooks/stop"}],
+                "Stop": [{"hooks": [{"url": "http://127.0.0.1:3456/hooks/stop"}]}],
             }
         }
         path = write_settings(tmp_path, settings)
@@ -299,7 +306,7 @@ class TestRemoveHooks:
 
     def test_keeps_other_settings_keys(self, tmp_path):
         settings = {
-            "hooks": {"Stop": [{"url": "http://127.0.0.1:3456/hooks/stop"}]},
+            "hooks": {"Stop": [{"hooks": [{"url": "http://127.0.0.1:3456/hooks/stop"}]}]},
             "otherKey": {"keep": "this"},
         }
         path = write_settings(tmp_path, settings)
@@ -318,7 +325,7 @@ class TestIsHooksInjected:
     def test_true_when_cc_claw_hooks_present(self, tmp_path):
         settings = {
             "hooks": {
-                "Stop": [{"url": "http://127.0.0.1:3456/hooks/stop"}]
+                "Stop": [{"hooks": [{"url": "http://127.0.0.1:3456/hooks/stop"}]}]
             }
         }
         path = write_settings(tmp_path, settings)
@@ -335,7 +342,7 @@ class TestIsHooksInjected:
         assert result is False
 
     def test_false_when_other_hooks_only(self, tmp_path):
-        settings = {"hooks": {"Stop": [{"url": "http://other.com/stop"}]}}
+        settings = {"hooks": {"Stop": [{"hooks": [{"url": "http://other.com/stop"}]}]}}
         path = write_settings(tmp_path, settings)
         with patch.object(hook_config, "SETTINGS_PATH", path):
             result = hook_config.is_hooks_injected()
@@ -345,7 +352,7 @@ class TestIsHooksInjected:
     def test_checks_all_four_hooks(self, tmp_path):
         # Each marker should be detected
         for marker in ["/hooks/stop", "/hooks/post-tool-use", "/hooks/pre-tool-use", "/hooks/notification"]:
-            settings = {"hooks": {"Stop": [{"url": f"http://127.0.0.1:3456{marker}"}]}}
+            settings = {"hooks": {"Stop": [{"hooks": [{"url": f"http://127.0.0.1:3456{marker}"}]}]}}
             path = write_settings(tmp_path, settings)
             with patch.object(hook_config, "SETTINGS_PATH", path):
                 result = hook_config.is_hooks_injected()

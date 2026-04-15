@@ -1209,15 +1209,20 @@ class TestStart:
             listen=AsyncMock(),
             on=MagicMock(),
         )
+        mock_hook_server = MagicMock()
+        mock_hook_server.start = AsyncMock()
+        mock_hook_server.stop = AsyncMock()
+        mock_hook_server.is_running = False
         with patch('client.claude.ClaudeExecutor.is_available', return_value=True):
             with patch('client.claude.ClaudeExecutor.get_version', return_value="1.0.0"):
                 with patch('asyncio.sleep', side_effect=mock_sleep):
                     with patch('asyncio.create_task', side_effect=lambda t, **k: created_tasks.append(t)):
                         with patch('client.daemon.WebSocketManager', return_value=mock_ws_instance):
-                            try:
-                                await daemon.start()
-                            except asyncio.CancelledError:
-                                pass
+                            with patch('client.daemon.HookServer', return_value=mock_hook_server):
+                                try:
+                                    await daemon.start()
+                                except asyncio.CancelledError:
+                                    pass
 
         # Scheduler, queue_manager, goal_engine, handler all initialized
         assert daemon.scheduler is not None
@@ -1260,23 +1265,28 @@ class TestStart:
             listen=AsyncMock(),
             on=MagicMock(),
         )
+        mock_hook_server = MagicMock()
+        mock_hook_server.start = AsyncMock()
+        mock_hook_server.stop = AsyncMock()
+        mock_hook_server.is_running = False
 
         with patch('client.claude.ClaudeExecutor.is_available', return_value=True):
             with patch('client.claude.ClaudeExecutor.get_version', return_value="1.0.0"):
                 with patch('asyncio.sleep', side_effect=mock_sleep):
                     with patch('asyncio.create_task'):
                         with patch('client.daemon.WebSocketManager', return_value=mock_ws_instance):
-                            with patch('client.profile.ProfileManager.is_onboarding_complete',
-                                       return_value=True):
-                                with patch('client.profile.ProfileManager.get_pending_tasks',
-                                           return_value=pending_tasks):
-                                    with patch('client.task_queue.TaskQueue.enqueue',
-                                               side_effect=lambda t, **k: enqueue_calls.append(t)):
-                                        with patch.object(daemon, '_start_autonomous_runner_if_needed') as mock_start_runner:
-                                            try:
-                                                await daemon.start()
-                                            except asyncio.CancelledError:
-                                                pass
+                            with patch('client.daemon.HookServer', return_value=mock_hook_server):
+                                with patch('client.profile.ProfileManager.is_onboarding_complete',
+                                           return_value=True):
+                                    with patch('client.profile.ProfileManager.get_pending_tasks',
+                                               return_value=pending_tasks):
+                                        with patch('client.task_queue.TaskQueue.enqueue',
+                                                   side_effect=lambda t, **k: enqueue_calls.append(t)):
+                                            with patch.object(daemon, '_start_autonomous_runner_if_needed') as mock_start_runner:
+                                                try:
+                                                    await daemon.start()
+                                                except asyncio.CancelledError:
+                                                    pass
 
         # Pending tasks enqueued
         assert len(enqueue_calls) == 2
@@ -1300,6 +1310,10 @@ class TestStart:
             listen=AsyncMock(),
             on=MagicMock(),
         )
+        mock_hook_server = MagicMock()
+        mock_hook_server.start = AsyncMock()
+        mock_hook_server.stop = AsyncMock()
+        mock_hook_server.is_running = False
 
         with caplog.at_level(logging.INFO):
             with patch('client.claude.ClaudeExecutor.is_available', return_value=True):
@@ -1307,9 +1321,10 @@ class TestStart:
                     with patch('asyncio.sleep', side_effect=mock_sleep):
                         with patch('asyncio.create_task'):
                             with patch('client.daemon.WebSocketManager', return_value=mock_ws_instance):
-                                with patch('client.profile.ProfileManager.is_onboarding_complete', return_value=False):
-                                    with patch.object(daemon, '_start_autonomous_runner_if_needed') as mock_start_runner:
-                                        await daemon.start()
+                                with patch('client.daemon.HookServer', return_value=mock_hook_server):
+                                    with patch('client.profile.ProfileManager.is_onboarding_complete', return_value=False):
+                                        with patch.object(daemon, '_start_autonomous_runner_if_needed') as mock_start_runner:
+                                            await daemon.start()
 
         # Log message printed
         assert "Autonomous runner will start after onboarding completes" in caplog.text
@@ -2188,11 +2203,11 @@ class TestSuggestNewGoalEdgeCases:
 
 
 class TestAutonomousRunnerGoalIdNotFound:
-    """Test autonomous runner when queue task's goal_id is not found in profile.goals (lines 239-240)."""
+    """Test autonomous runner when queue task's goal_id is not found in profile.goals (lines 255-263)."""
 
     @pytest.mark.asyncio
-    async def test_requeues_task_when_goal_not_found_in_profile(self):
-        """Queue task has goal_id, but goal not in profile.goals → enqueue back (lines 239-240)."""
+    async def test_executes_orphan_task_directly_when_goal_not_found_in_profile(self):
+        """Queue task has goal_id, but goal not in profile.goals → execute directly via retry_manager, not re-enqueue (lines 255-263)."""
         config = ClientConfig()
         daemon = CCClawDaemon(config)
         daemon._running = True
@@ -2204,7 +2219,9 @@ class TestAutonomousRunnerGoalIdNotFound:
         mock_tb.is_rate_limited = False
         daemon.profile = MagicMock()
         daemon.profile.token_budget = mock_tb
-        daemon.profile.get_active_goal.return_value = None
+        # After orphan task completes, get_active_goal returns None so loop exits
+        daemon.profile.get_active_goal = MagicMock(side_effect=[None, None, None])
+        daemon.profile.get_tasks_for_goal = MagicMock(return_value=[])
         daemon.profile.goals = []  # Empty — goal not found for any task
 
         orphan_task = Task(id="orphan", description="Orphan task", goal_id="missing-goal-id")
@@ -2212,24 +2229,35 @@ class TestAutonomousRunnerGoalIdNotFound:
         qt.task = orphan_task
 
         daemon.queue_manager = MagicMock()
-        daemon.queue_manager.get_next_task = AsyncMock(return_value=qt)
+        # Return orphan task once, then None so loop exits
+        daemon.queue_manager.get_next_task = AsyncMock(side_effect=[qt, None])
         daemon.queue_manager.queue.enqueue = MagicMock()
 
         daemon.goal_engine = MagicMock()
         daemon._suggest_new_goal = AsyncMock(return_value=None)
+        daemon.claude = MagicMock()  # Prevent AttributeError in _execute_autonomous_task
 
-        call_count = [0]
+        daemon.retry_manager = MagicMock()
+        daemon.retry_manager.execute = AsyncMock(return_value=("done", [], None))
+
+        exit_after = [0]
 
         async def mock_sleep(s):
-            call_count[0] += 1
-            if call_count[0] >= 1:
+            exit_after[0] += 1
+            # First sleep: decompose fails → exit after second iteration
+            if exit_after[0] >= 2:
                 daemon._running = False
 
         with patch('asyncio.sleep', side_effect=mock_sleep):
             await daemon._autonomous_runner()
 
-        # Task was requeued because its goal wasn't found in profile.goals
-        daemon.queue_manager.queue.enqueue.assert_called_once_with(orphan_task, user_initiated=False)
+        # Orphan task executed via retry_manager, not re-enqueued
+        daemon.retry_manager.execute.assert_called_once()
+        call_args = daemon.retry_manager.execute.call_args[0]
+        assert call_args[1] == daemon.claude.execute
+        assert call_args[2] == "Orphan task"
+        # No enqueue calls were made (the bug would have caused re-enqueue)
+        daemon.queue_manager.queue.enqueue.assert_not_called()
 
 
 class TestAutonomousRunnerSuggestGoalPath:
