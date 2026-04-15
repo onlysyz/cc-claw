@@ -8,7 +8,9 @@ import os
 import sys
 import uuid
 import platform
+import shutil
 from pathlib import Path
+from typing import Optional
 
 from dotenv import load_dotenv
 
@@ -277,58 +279,93 @@ def cmd_setup(args):
     print("  2. Run 'cc-claw start' to start the daemon")
 
 
+def _auto_detect_claude_path() -> Optional[str]:
+    """Try to find claude in PATH."""
+    for name in ("claude", "claude-code", "/usr/local/bin/claude",
+                 "/usr/bin/claude", shutil.which("claude")):
+        if name and shutil.which(name):
+            return name
+    return None
+
+
+def _derive_ws_url(api_url: str) -> str:
+    ws = api_url.replace("https://", "wss://").replace("http://", "ws://")
+    if "/api" in ws:
+        ws = ws.replace("/api", "/ws")
+    elif not ws.endswith("/ws"):
+        ws = ws.rstrip("/") + "/ws"
+    return ws
+
+
 def cmd_install(args):
-    """One-command install: setup + pair + start"""
+    """One-command install: configure + auto-detect + pair + start"""
     config = ClientConfig.load()
 
-    print("=== CC-Claw One-Command Install ===\n")
+    print("=== CC-Claw Install ===\n")
 
-    # Check if already paired
+    # Already paired → just start
     if config.device_id and config.device_token:
-        print("✓ Already paired!")
-        print("\nStarting daemon...")
+        print("✓ Already paired")
         cmd_start(args)
         return
 
-    # Check if server URL is configured (default to localhost)
-    if "example.com" in config.server_api_url:
-        print("Step 1: Server URL")
-        print("  Default: http://localhost:3000 (local development)")
-        server_url = input("  Enter server URL (or press Enter for localhost): ").strip()
-        if not server_url:
-            server_url = "http://localhost:3000"
+    # --- 1. Server URL ---
+    server_url = None
+    if args.server_url:
+        server_url = args.server_url
         config.server_api_url = server_url
-        # Derive WS URL
-        ws_url = server_url.replace("https://", "wss://").replace("http://", "ws://")
-        if "/api" in ws_url:
-            ws_url = ws_url.replace("/api", "/ws")
-        else:
-            ws_url += "/ws"
-        config.server_ws_url = ws_url
-        print(f"  API: {config.server_api_url}")
-        print(f"  WS:  {config.server_ws_url}")
+        config.server_ws_url = _derive_ws_url(server_url)
+        print(f"  Server: {server_url}")
+    elif "example.com" in config.server_api_url:
+        print("Step 1: Server URL")
+        print("  Press Enter for http://localhost:3000")
+        server_url = input("  > ").strip() or "http://localhost:3000"
+        config.server_api_url = server_url
+        config.server_ws_url = _derive_ws_url(server_url)
+    else:
+        print(f"  Server: {config.server_api_url} (already configured)")
 
-    # Set recommended defaults
-    config.permission_mode = "bypassPermissions"
-    config.working_dir = "/tmp/cc-claw-sessions"
+    # --- 2. Claude path (auto-detect) ---
+    claude_path = None
+    if args.claude_path:
+        claude_path = args.claude_path
+    elif config.claude_path and config.claude_path != "claude":
+        claude_path = config.claude_path
+    else:
+        claude_path = _auto_detect_claude_path()
 
-    # Check Claude
-    from client import ClaudeExecutor
-    claude = ClaudeExecutor(config)
-    if not claude.is_available():
-        print("\n✗ Claude CLI not found!")
-        print("  Please install Claude Code first:")
-        print("  https://docs.anthropic.com/en/docs/claude-code/initial-setup")
+    if not claude_path:
+        print("\n✗ Claude CLI not found in PATH!")
+        print("  Install: https://docs.anthropic.com/en/docs/claude-code")
         return
 
-    print(f"✓ Claude CLI: {claude.get_version()}")
+    config.claude_path = claude_path
+    print(f"  Claude: {claude_path}")
 
-    # Save config
+    # Verify Claude is actually callable
+    from client import ClaudeExecutor
+    claude_exec = ClaudeExecutor(config)
+    if not claude_exec.is_available():
+        print(f"\n✗ Claude CLI not working at '{claude_path}'")
+        print("  Try: cc-claw install --claude-path=/full/path/to/claude")
+        return
+
+    print(f"  Version: {claude_exec.get_version()}")
+
+    # --- 3. Working directory (auto-detect) ---
+    working_dir = args.working_dir or config.working_dir or os.getcwd()
+    config.working_dir = working_dir
+    print(f"  Working dir: {working_dir}")
+
+    # --- 4. Permission mode ---
+    config.permission_mode = "bypassPermissions"
+
     config.save()
+    print("\n✓ Configuration saved")
 
-    # Do pairing
-    print("\n=== Pairing with Telegram ===")
-    print("  1. Open Telegram and send /pair to your bot")
+    # --- 5. Pairing ---
+    print("\n=== Pairing ===")
+    print("  1. Open Telegram → send /pair to your bot")
     print("  2. Enter the 6-digit code below:\n")
 
     device_id = str(uuid.uuid4())
@@ -337,40 +374,34 @@ def cmd_install(args):
     device_platform = platform.system().lower()
 
     print(f"Device: {device_name} ({device_platform})")
-    pairing_code = input("Enter pairing code: ").strip().upper()
+    pairing_code = input("Code: ").strip().upper()
 
     if not pairing_code or len(pairing_code) != 6:
-        print("✗ Invalid pairing code")
+        print("✗ Invalid code, run 'cc-claw install' again to retry")
         return
 
-    print("\nCompleting pairing...")
-
+    print("\nConnecting...")
     async def complete():
         from client import APIClient
         api = APIClient(config)
-        result = await api.complete_pairing(
+        return await api.complete_pairing(
             code=pairing_code,
             device_id=device_id,
             device_name=device_name,
             platform=device_platform,
             token=device_token,
         )
-        return result
 
-    result = asyncio.run(complete())
-
-    if result:
+    if asyncio.run(complete()):
         config.device_id = device_id
         config.device_token = device_token
         config.save()
-        print("\n✓ Pairing successful!")
+        print("✓ Pairing successful!\n")
     else:
-        print("\n✗ Pairing failed!")
-        print("  - Check if the code is correct")
-        print("  - Code expires in 5 minutes")
+        print("✗ Pairing failed — check the code and try again\n")
         return
 
-    print("\n=== Starting daemon ===")
+    print("Starting daemon...\n")
     cmd_start(args)
 
 
@@ -411,7 +442,13 @@ def main():
     parser_setup.set_defaults(func=cmd_setup)
 
     # install
-    parser_install = subparsers.add_parser("install", help="One-command install: setup + pair + start")
+    parser_install = subparsers.add_parser("install", help="One-command install: configure + pair + start")
+    parser_install.add_argument("--server-url", metavar="URL",
+                               help="Server URL (e.g. https://cc-claw.example.com)")
+    parser_install.add_argument("--claude-path", metavar="PATH",
+                               help="Path to Claude CLI (auto-detected if omitted)")
+    parser_install.add_argument("--working-dir", metavar="DIR",
+                               help="Working directory for Claude sessions (default: cwd)")
     parser_install.set_defaults(func=cmd_install)
 
     args = parser.parse_args()
