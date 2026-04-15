@@ -44,7 +44,7 @@ dev = [
 ]
 
 [project.scripts]
-cc-claw = "cc_claw.cli:main"
+cc-claw = "cli:main"
 cc-claw-server = "server.run:main"
 
 [tool.setuptools.packages.find]

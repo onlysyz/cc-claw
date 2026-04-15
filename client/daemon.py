@@ -19,6 +19,7 @@ from .memory import PersistentMemory
 from .token_tracker import TokenTracker
 from .hook_server import HookServer
 from .hook_config import inject_hooks, remove_hooks, get_hook_port
+from .local_api import LocalAPIServer
 
 
 logging.basicConfig(
@@ -31,8 +32,9 @@ logger = logging.getLogger(__name__)
 class CCClawDaemon:
     """CC-Claw daemon process"""
 
-    def __init__(self, config: ClientConfig):
+    def __init__(self, config: ClientConfig, local_mode: bool = False):
         self.config = config
+        self.local_mode = local_mode
         self.ws_manager: Optional[WebSocketManager] = None
         self.claude: Optional[ClaudeExecutor] = None
         self.handler: Optional[MessageHandler] = None
@@ -47,6 +49,8 @@ class CCClawDaemon:
         self._heartbeat_task: Optional[asyncio.Task] = None
         # Hook server for Claude Code harness integration
         self.hook_server: Optional[HookServer] = None
+        # Local API server (local mode only)
+        self.local_api: Optional["LocalAPIServer"] = None
         # New features
         self.memory: Optional[PersistentMemory] = None
         self.retry_manager = get_retry_manager()
@@ -168,6 +172,126 @@ class CCClawDaemon:
         else:
             logger.error("Failed to connect to server")
             sys.exit(1)
+
+    async def start_local(self):
+        """Start daemon in local-only mode (no server/pairing required)."""
+        if self._running:
+            logger.warning("Daemon already running")
+            return
+
+        logger.info("Starting CC-Claw daemon in LOCAL mode...")
+
+        # Initialize scheduler
+        self.scheduler = TaskScheduler()
+        logger.info("Task scheduler initialized")
+
+        # Initialize profile manager
+        self.profile = ProfileManager()
+        if self.profile.is_onboarding_complete():
+            logger.info(f"Profile loaded: {self.profile.profile.profession}")
+        else:
+            logger.info("Profile not onboarded yet")
+
+        # Initialize persistent memory
+        self.memory = PersistentMemory()
+        logger.info("Persistent memory initialized")
+
+        # Check Claude CLI
+        self.claude = ClaudeExecutor(self.config)
+        if not self.claude.is_available():
+            logger.error("Claude CLI not found. Please install it first.")
+            sys.exit(1)
+
+        logger.info(f"Claude CLI version: {self.claude.get_version()}")
+
+        # Initialize goal engine
+        self.goal_engine = GoalEngine(self.config, self.profile, self.claude)
+
+        # Initialize queue manager
+        self.queue_manager = QueueManager(self.profile)
+
+        # Start Local API server (for receiving goals via cc-claw goal command)
+        self.local_api = LocalAPIServer(port=3457)
+        self.local_api.register_daemon(self)
+        await self.local_api.start()
+        print("Local API server: http://127.0.0.1:3457")
+        print("  cc-claw goal <description>  — send a goal")
+        print("  cc-claw status            — check status")
+        print()
+
+        # Hook server for Claude Code harness integration
+        hook_port = get_hook_port()
+        self.hook_server = HookServer(port=hook_port)
+        self.hook_server.register_stop_handler(self._on_hook_stop)
+        self.hook_server.register_post_tool_use_handler(self._on_hook_post_tool_use)
+        self.hook_server.register_notification_handler(self._on_hook_notification)
+        await self.hook_server.start()
+
+        # Start daemon heartbeat
+        self._heartbeat_task = asyncio.create_task(self._heartbeat_sender(hook_port))
+
+        # Inject hooks
+        inject_hooks(hook_port)
+        logger.info("Hooks injected")
+
+        # Start background checkers
+        self._task_checker_task = asyncio.create_task(self._task_checker())
+        self._token_checker_task = asyncio.create_task(self._token_checker())
+
+        self._running = True
+
+        # Restore pending tasks
+        if self.profile.is_onboarding_complete():
+            pending = self.profile.get_pending_tasks()
+            for task in pending:
+                self.queue_manager.queue.enqueue(task, user_initiated=False)
+            logger.info(f"Restored {len(pending)} pending tasks to queue")
+
+        # Start autonomous runner
+        self._start_autonomous_runner_if_needed()
+
+        # Monitor local API queue for new goals
+        asyncio.create_task(self._local_goal_listener())
+
+        logger.info("Local daemon running. Waiting for goals via 'cc-claw goal'...")
+
+        # Keep running
+        while self._running:
+            await asyncio.sleep(1)
+
+    async def _local_goal_listener(self):
+        """Listen for goals from the Local API server and enqueue them."""
+        logger.info("Local goal listener started")
+        while self._running:
+            try:
+                goal_desc = await self.local_api.get_next_goal()
+                if not goal_desc:
+                    continue
+
+                logger.info(f"Local goal received: {goal_desc[:50]}...")
+
+                # Create a goal
+                goal = self.profile.add_goal(goal_desc)
+                logger.info(f"Created goal: {goal.id} — {goal_desc}")
+
+                # Decompose into tasks
+                if self.goal_engine:
+                    tasks = await self.goal_engine.decompose_goal(goal.id)
+                    if tasks:
+                        for task in tasks:
+                            self.queue_manager.queue.enqueue(task, user_initiated=False)
+                        logger.info(f"Enqueued {len(tasks)} tasks for goal {goal.id}")
+                    else:
+                        logger.warning("Goal decomposition returned no tasks")
+
+                # Start autonomous runner if not already running
+                self._start_autonomous_runner_if_needed()
+
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.error(f"Error in local goal listener: {e}")
+                await asyncio.sleep(5)
 
     async def _token_checker(self):
         """Background task to check token usage and handle rate limits
@@ -744,6 +868,11 @@ No markdown, no explanation, just the JSON object."""
         if self.ws_manager:
             await self.ws_manager.disconnect()
 
+        # Stop local API server
+        if self.local_api:
+            await self.local_api.stop()
+            self.local_api = None
+
         logger.info("Daemon stopped")
 
     def run(self):
@@ -762,6 +891,28 @@ No markdown, no explanation, just the JSON object."""
 
         try:
             loop.run_until_complete(self.start())
+        except Exception as e:
+            logger.error(f"Daemon error: {e}")
+            sys.exit(1)
+        finally:
+            loop.close()
+
+    def run_local(self):
+        """Run the daemon in local-only mode (no server/pairing required)."""
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+        # Signal handling
+        def signal_handler(sig, frame):
+            logger.info(f"Received signal {sig}")
+            loop.create_task(self.stop())
+            loop.stop()
+
+        signal.signal(signal.SIGINT, signal_handler)
+        signal.signal(signal.SIGTERM, signal_handler)
+
+        try:
+            loop.run_until_complete(self.start_local())
         except Exception as e:
             logger.error(f"Daemon error: {e}")
             sys.exit(1)

@@ -31,6 +31,12 @@ def cmd_start(args):
     """Start the daemon, guiding through first-time setup if needed."""
     config = ClientConfig.load()
 
+    # Local mode: no server/pairing required
+    if getattr(args, "local", False):
+        daemon = CCClawDaemon(config, local_mode=True)
+        daemon.run_local()
+        return
+
     # Not paired → run guided install flow
     if not config.device_id or not config.device_token:
         print("=== First-time setup ===\n")
@@ -242,6 +248,18 @@ def cmd_unpair(args):
     print("Device unpaired successfully")
 
 
+def cmd_goal(args):
+    """Send a goal to the local daemon (local mode: cc-claw start --local)."""
+    goal_text = " ".join(args.goal).strip()
+    if not goal_text:
+        print("Usage: cc-claw goal <goal description>")
+        print("Example: cc-claw goal 实现用户登录功能")
+        return
+
+    from client.local_api import post_goal
+    asyncio.run(post_goal(goal_text))
+
+
 def cmd_uninstall(args):
     """Remove all local configuration, data, and hooks."""
     import shutil
@@ -396,7 +414,7 @@ def cmd_setup(args):
 
 
 def cmd_install(args):
-    """One-command install: configure + auto-detect + pair + start"""
+    """One-command install: auto-detect config + pair + start"""
     config = ClientConfig.load()
 
     print("=== CC-Claw Install ===\n")
@@ -407,13 +425,11 @@ def cmd_install(args):
         cmd_start(args)
         return
 
-    # --- 1. Server URL ---
-    server_url = None
+    # --- 1. Server URL (only prompt if not configured) ---
     if args.server_url:
-        server_url = args.server_url
-        config.server_api_url = server_url
-        config.server_ws_url = _derive_ws_url(server_url)
-        print(f"  Server: {server_url}")
+        config.server_api_url = args.server_url
+        config.server_ws_url = _derive_ws_url(args.server_url)
+        print(f"  Server: {config.server_api_url}")
     elif "example.com" in config.server_api_url:
         print("Step 1: Server URL")
         print("  Press Enter for http://localhost:3000")
@@ -423,48 +439,30 @@ def cmd_install(args):
     else:
         print(f"  Server: {config.server_api_url} (already configured)")
 
-    # --- 2. Claude path (auto-detect) ---
-    claude_path = None
-    if args.claude_path:
-        claude_path = args.claude_path
-    elif config.claude_path and config.claude_path != "claude":
-        claude_path = config.claude_path
-    else:
-        claude_path = _auto_detect_claude_path()
+    # --- 2. Claude CLI (auto-detected, verify it works) ---
+    print(f"\n  Claude: {config.claude_path}")
 
-    if not claude_path:
-        print("\n✗ Claude CLI not found in PATH!")
-        print("  Install: https://docs.anthropic.com/en/docs/claude-code")
-        return
-
-    config.claude_path = claude_path
-    print(f"  Claude: {claude_path}")
-
-    # Verify Claude is actually callable
     from client import ClaudeExecutor
     claude_exec = ClaudeExecutor(config)
     if not claude_exec.is_available():
-        print(f"\n✗ Claude CLI not working at '{claude_path}'")
-        print("  Try: cc-claw install --claude-path=/full/path/to/claude")
+        print(f"\n✗ Claude CLI not working at '{config.claude_path}'")
+        print("  Install: https://docs.anthropic.com/en/docs/claude-code")
+        print("  Or specify path: cc-claw install --claude-path=/full/path/to/claude")
         return
 
     print(f"  Version: {claude_exec.get_version()}")
 
-    # --- 3. Working directory (auto-detect) ---
-    working_dir = args.working_dir or config.working_dir or os.getcwd()
-    config.working_dir = working_dir
-    print(f"  Working dir: {working_dir}")
-
-    # --- 4. Permission mode ---
-    config.permission_mode = "bypassPermissions"
+    # --- 3. Working dir & Permission (auto-detected) ---
+    print(f"  Working dir: {config.working_dir}")
+    print(f"  Permission: {config.permission_mode}")
 
     config.save()
     print("\n✓ Configuration saved")
 
-    # --- 5. Pairing ---
+    # --- 4. Pairing ---
     print("\n=== Pairing ===")
-    print("  1. Open Telegram → send /pair to your bot")
-    print("  2. Enter the 6-digit code below:\n")
+    print("  1. Open Telegram → send /pair to your CC-Claw bot")
+    print("  2. Enter the 6-digit code:\n")
 
     device_id = str(uuid.uuid4())
     device_token = str(uuid.uuid4())
@@ -511,6 +509,8 @@ def main():
 
     # start
     parser_start = subparsers.add_parser("start", help="Start the daemon")
+    parser_start.add_argument("--local", action="store_true",
+                              help="Run in local-only mode (no server/pairing required)")
     parser_start.set_defaults(func=cmd_start)
 
     # stop
@@ -554,6 +554,11 @@ def main():
     parser_install.add_argument("--working-dir", metavar="DIR",
                                help="Working directory for Claude sessions (default: cwd)")
     parser_install.set_defaults(func=cmd_install)
+
+    # goal
+    parser_goal = subparsers.add_parser("goal", help="Send a goal (local mode only)")
+    parser_goal.add_argument("goal", nargs="+", help="Goal description")
+    parser_goal.set_defaults(func=cmd_goal)
 
     args = parser.parse_args()
 
