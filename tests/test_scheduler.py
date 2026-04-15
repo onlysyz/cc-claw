@@ -1,6 +1,7 @@
 """Tests for scheduler.py — TaskScheduler and ScheduledTask."""
 
 import json
+import os
 from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch, MagicMock
@@ -292,6 +293,23 @@ class TestSchedulerFormatTasksList:
         out = ts.format_tasks_list()
         assert "running" in out
         assert "🔄" in out  # executing emoji
+
+    def test_format_shows_due_task_即将执行(self, tmp_path):
+        """覆盖 scheduler.py:160 — execute_at 已到期时显示 '即将执行'"""
+        ts = make_scheduler(tmp_path)
+        # 直接注入已到期的任务（execute_at 为 1 小时前）
+        past_time = (datetime.now() - timedelta(hours=1)).isoformat()
+        ts.tasks.append(ScheduledTask(
+            id="due-task-1",
+            command="overdue job",
+            delay_minutes=0,
+            created_at=datetime.now().isoformat(),
+            execute_at=past_time,
+            status="pending",
+        ))
+        out = ts.format_tasks_list()
+        assert "即将执行" in out
+        assert "overdue job" in out
 
 
 # ---------------------------------------------------------------------------

@@ -136,6 +136,18 @@ class TestBuildEnv:
             env["FOO"] = "modified"
             assert os.environ.get("FOO") == "bar"
 
+    def test_sets_cc_claw_task_id_when_provided(self, executor):
+        """覆盖 claude.py:33 — task_id 非空时设置 CC_CLAW_TASK_ID 环境变量"""
+        env = executor._build_env(task_id="task-abc-123")
+        assert env["CC_CLAW_TASK_ID"] == "task-abc-123"
+
+    def test_no_cc_claw_task_id_when_task_id_none(self, executor):
+        """无 task_id 时 _build_env 不覆盖/不设置 CC_CLAW_TASK_ID"""
+        with patch.dict(os.environ, {"CC_CLAW_TASK_ID": "pre-existing"}, clear=False):
+            env = executor._build_env(task_id=None)
+            # _build_env 不删除 CC_CLAW_TASK_ID（只删除 CLAUDE*），所以原始值保留
+            assert env.get("CC_CLAW_TASK_ID") == "pre-existing"
+
 
 # ============================================================================
 # _get_screenshot_files() tests
