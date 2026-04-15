@@ -28,10 +28,82 @@ logger = logging.getLogger(__name__)
 
 
 def cmd_start(args):
-    """Start the daemon"""
+    """Start the daemon, guiding through first-time setup if needed."""
     config = ClientConfig.load()
+
+    # Not paired → run guided install flow
+    if not config.device_id or not config.device_token:
+        print("=== First-time setup ===\n")
+        print("CC-Claw needs to connect to a server and pair with your bot.\n")
+
+        # Step 1: Server URL
+        if "example.com" in config.server_api_url:
+            print("Step 1: Server URL")
+            print("  Press Enter for http://localhost:3000")
+            server_url = input("  > ").strip() or "http://localhost:3000"
+            config.server_api_url = server_url
+            config.server_ws_url = _derive_ws_url(server_url)
+            print(f"  API: {config.server_api_url}")
+            print(f"  WS:  {config.server_ws_url}\n")
+
+        # Step 2: Pairing
+        print("Step 2: Pairing with bot")
+        print("  1. Open Telegram → find your CC-Claw bot")
+        print("  2. Send /pair to the bot")
+        print("  3. The bot will reply with a 6-digit code")
+        print("  4. Enter the code below:\n")
+
+        device_id = str(uuid.uuid4())
+        device_token = str(uuid.uuid4())
+        device_name = platform.node() or "My Device"
+        device_platform = platform.system().lower()
+
+        pairing_code = input("Code: ").strip().upper()
+        if not pairing_code or len(pairing_code) != 6:
+            print("✗ Invalid code, run 'cc-claw start' again to retry")
+            return
+
+        print("\nConnecting...")
+        async def do_pair():
+            from client import APIClient
+            api = APIClient(config)
+            return await api.complete_pairing(
+                code=pairing_code,
+                device_id=device_id,
+                device_name=device_name,
+                platform=device_platform,
+                token=device_token,
+            )
+
+        if not asyncio.run(do_pair()):
+            print("✗ Pairing failed — check the code and try again")
+            return
+
+        config.device_id = device_id
+        config.device_token = device_token
+        config.save()
+        print("✓ Paired successfully!\n")
+
     daemon = CCClawDaemon(config)
     daemon.run()
+
+
+def _auto_detect_claude_path() -> Optional[str]:
+    """Try to find claude in PATH."""
+    for name in ("claude", "claude-code", "/usr/local/bin/claude",
+                 "/usr/bin/claude", shutil.which("claude")):
+        if name and shutil.which(name):
+            return name
+    return None
+
+
+def _derive_ws_url(api_url: str) -> str:
+    ws = api_url.replace("https://", "wss://").replace("http://", "ws://")
+    if "/api" in ws:
+        ws = ws.replace("/api", "/ws")
+    elif not ws.endswith("/ws"):
+        ws = ws.rstrip("/") + "/ws"
+    return ws
 
 
 def cmd_stop(args):
@@ -277,24 +349,6 @@ def cmd_setup(args):
     print("\nNext steps:")
     print("  1. Run 'cc-claw pair' to pair with Telegram bot")
     print("  2. Run 'cc-claw start' to start the daemon")
-
-
-def _auto_detect_claude_path() -> Optional[str]:
-    """Try to find claude in PATH."""
-    for name in ("claude", "claude-code", "/usr/local/bin/claude",
-                 "/usr/bin/claude", shutil.which("claude")):
-        if name and shutil.which(name):
-            return name
-    return None
-
-
-def _derive_ws_url(api_url: str) -> str:
-    ws = api_url.replace("https://", "wss://").replace("http://", "ws://")
-    if "/api" in ws:
-        ws = ws.replace("/api", "/ws")
-    elif not ws.endswith("/ws"):
-        ws = ws.rstrip("/") + "/ws"
-    return ws
 
 
 def cmd_install(args):

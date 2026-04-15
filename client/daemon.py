@@ -540,52 +540,6 @@ class CCClawDaemon:
         tool_name = payload.get("tool_name", "")
         logger.debug(f"[HOOK:PostToolUse] task_id={task_id}, tool={tool_name}")
 
-    def _build_progress_message(self, tool_name: str, tool_input: dict, tool_response: dict) -> str:
-        """Build a human-readable progress message from a tool call result."""
-        import os
-
-        if tool_name == "Bash":
-            cmd = tool_input.get("command", "")
-            if len(cmd) > 60:
-                cmd = cmd[:57] + "..."
-            return f"Ran: {cmd}"
-
-        elif tool_name == "Write":
-            path = tool_input.get("file_path", "")
-            if path:
-                path = os.path.basename(path)
-            return f"Wrote: {path}" if path else "Write"
-
-        elif tool_name == "Read":
-            path = tool_input.get("file_path", "")
-            if path:
-                path = os.path.basename(path)
-            return f"Read: {path}" if path else "Read"
-
-        elif tool_name == "Edit":
-            path = tool_input.get("file_path", "")
-            if path:
-                path = os.path.basename(path)
-            return f"Edited: {path}" if path else "Edit"
-
-        elif tool_name == "Glob":
-            pattern = tool_input.get("pattern", "")
-            return f"Glob: {pattern}"
-
-        elif tool_name == "Grep":
-            pattern = tool_input.get("pattern", "")
-            return f"Grep: {pattern[:40]}"
-
-        elif tool_name == "WebFetch":
-            url = tool_input.get("url", "")
-            return f"WebFetch: {url[:50]}"
-
-        elif tool_name == "Task":
-            return f"Task: {tool_input.get('description', '')[:40]}"
-
-        else:
-            return tool_name
-
     async def _on_hook_notification(self, task_id: Optional[str], payload: dict):
         """Handle Notification hook callback from Claude Code.
 

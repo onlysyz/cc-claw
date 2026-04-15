@@ -1229,8 +1229,8 @@ class TestStart:
         assert daemon.queue_manager is not None
         assert daemon.goal_engine is not None
         assert daemon.handler is not None
-        # Background tasks created: listen, _task_checker, _token_checker
-        assert len(created_tasks) == 3
+        # Background tasks created: listen, _task_checker, _token_checker, _heartbeat_sender
+        assert len(created_tasks) == 4
         # _running flag was set before sleep interrupted it
         assert daemon._running is False  # loop exited via CancelledError
         # ws_manager.on() called 8 times total:
@@ -2520,72 +2520,16 @@ class TestOnHookPostToolUse:
         daemon.profile.tasks = []
         daemon.ws_manager = None
 
-        # _build_progress_message("", {}, {}) → "" → not msg → return
         # Should not raise
         await daemon._on_hook_post_tool_use("task-1", {"tool_name": ""})
 
-    def test_build_progress_message_bash_truncates_long_command(self):
-        config = ClientConfig()
-        daemon = CCClawDaemon(config)
-
-        msg = daemon._build_progress_message(
-            "Bash",
-            {"command": "python -c 'import sys; print(sys.version)'"},
-            {}
-        )
-        assert msg == "Ran: python -c 'import sys; print(sys.version)'"
-
-        long_cmd = "python " + "a" * 80
-        msg_long = daemon._build_progress_message("Bash", {"command": long_cmd}, {})
-        # "Ran: " (5) + up to 57 cmd chars + "..." (3) = max 65
-        assert len(msg_long) <= 65
-        assert msg_long.endswith("...")
-
-    def test_build_progress_message_write_read_edit(self):
-        config = ClientConfig()
-        daemon = CCClawDaemon(config)
-
-        assert daemon._build_progress_message("Write", {"file_path": "/a/b/c.py"}, {}) == "Wrote: c.py"
-        assert daemon._build_progress_message("Read", {"file_path": "/x/y.py"}, {}) == "Read: y.py"
-        assert daemon._build_progress_message("Edit", {"file_path": "/foo/bar.py"}, {}) == "Edited: bar.py"
-        # empty path falls back to tool name
-        assert daemon._build_progress_message("Write", {}, {}) == "Write"
-
-    def test_build_progress_message_glob_grep_webfetch_task(self):
-        config = ClientConfig()
-        daemon = CCClawDaemon(config)
-
-        assert daemon._build_progress_message("Glob", {"pattern": "**/*.py"}, {}) == "Glob: **/*.py"
-        assert daemon._build_progress_message("Grep", {"pattern": "TODO.*fix"}, {}) == "Grep: TODO.*fix"
-        assert daemon._build_progress_message("WebFetch", {"url": "https://example.com/api"}, {}) == "WebFetch: https://example.com/api"
-        assert daemon._build_progress_message("Task", {"description": "Write tests"}, {}) == "Task: Write tests"
-        # long pattern/truncate
-        long_pattern = "x" * 60
-        msg = daemon._build_progress_message("Grep", {"pattern": long_pattern}, {})
-        assert len(msg) <= 46
-        assert msg.endswith("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")
-
-    def test_build_progress_message_empty_returns_empty_string(self):
-        config = ClientConfig()
-        daemon = CCClawDaemon(config)
-        # Empty tool_name falls through to else → returns tool_name (empty)
-        assert daemon._build_progress_message("", {}, {}) == ""
-
-    def test_build_progress_message_unknown_returns_tool_name(self):
-        config = ClientConfig()
-        daemon = CCClawDaemon(config)
-        assert daemon._build_progress_message("SomeUnknownTool", {}, {}) == "SomeUnknownTool"
-
     @pytest.mark.asyncio
-    async def test_sends_notification_via_ws(self):
+    async def test_post_tool_use_no_notification_sent(self):
+        """PostToolUse logs at debug level but does NOT send a WebSocket notification."""
         config = ClientConfig()
         daemon = CCClawDaemon(config)
-
-        task = MagicMock()
-        task.id = "task-1"
-        task.description = "My test task"
         daemon.profile = MagicMock()
-        daemon.profile.tasks = [task]
+        daemon.profile.tasks = []
 
         ws_mock = MagicMock()
         ws_mock.is_connected = True
@@ -2598,26 +2542,19 @@ class TestOnHookPostToolUse:
             "tool_response": {}
         })
 
-        ws_mock.send_notification.assert_called_once()
-        msg = ws_mock.send_notification.call_args[0][0]
-        assert "🔧" in msg
-        assert "My test task" in msg
-        assert "Ran: pytest" in msg
+        # No notification should be sent
+        ws_mock.send_notification.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_no_ws_manager_skips_notification(self):
+    async def test_post_tool_use_gracefully_handles_no_task_id(self):
+        """Missing task_id is silently ignored (no exception raised)."""
         config = ClientConfig()
         daemon = CCClawDaemon(config)
         daemon.profile = MagicMock()
-        daemon.profile.tasks = []
         daemon.ws_manager = None
 
         # Should not raise
-        await daemon._on_hook_post_tool_use("task-1", {
-            "tool_name": "Bash",
-            "tool_input": {"command": "ls"},
-            "tool_response": {}
-        })
+        await daemon._on_hook_post_tool_use(None, {"tool_name": "Bash"})
 
 
 class TestOnHookNotification:
