@@ -44,6 +44,7 @@ class CCClawDaemon:
         self._task_checker_task: Optional[asyncio.Task] = None
         self._token_checker_task: Optional[asyncio.Task] = None
         self._autonomous_runner_task: Optional[asyncio.Task] = None
+        self._heartbeat_task: Optional[asyncio.Task] = None
         # Hook server for Claude Code harness integration
         self.hook_server: Optional[HookServer] = None
         # New features
@@ -137,6 +138,9 @@ class CCClawDaemon:
                 self.hook_server.register_post_tool_use_handler(self._on_hook_post_tool_use)
                 self.hook_server.register_notification_handler(self._on_hook_notification)
                 await self.hook_server.start()
+
+                # Start daemon heartbeat so the hook server can detect disconnection
+                self._heartbeat_task = asyncio.create_task(self._heartbeat_sender(hook_port))
 
                 # Inject hooks into Claude Code settings.json so Claude calls back to us
                 if self.profile.is_onboarding_complete():
@@ -720,6 +724,31 @@ No markdown, no explanation, just the JSON object."""
 
             await asyncio.sleep(10)  # Check every 10 seconds
 
+    async def _heartbeat_sender(self, port: int):
+        """Periodically send heartbeats to the local hook server.
+
+        The hook server monitors this and removes hooks from settings.json
+        if heartbeats stop (indicating the daemon has died).
+        """
+        import aiohttp
+        heartbeat_url = f"http://127.0.0.1:{port}/hooks/heartbeat"
+        logger.info(f"Heartbeat sender started, will ping {heartbeat_url}")
+        session: Optional[aiohttp.ClientSession] = None
+        try:
+            while self._running:
+                try:
+                    if session is None:
+                        session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=5))
+                    await session.post(heartbeat_url)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:
+                    logger.debug(f"Heartbeat failed (daemon may be starting up): {e}")
+                await asyncio.sleep(15)
+        finally:
+            if session is not None:
+                await session.close()
+
     async def _execute_task(self, task):
         """Execute a scheduled task"""
         self.scheduler.mark_executing(task.id)
@@ -767,6 +796,14 @@ No markdown, no explanation, just the JSON object."""
 
         if self._autonomous_runner_task:
             self._autonomous_runner_task.cancel()
+
+        if self._heartbeat_task:
+            self._heartbeat_task.cancel()
+            try:
+                await self._heartbeat_task
+            except asyncio.CancelledError:
+                pass
+            self._heartbeat_task = None
 
         # Stop hook server and remove hooks from settings.json
         if self.hook_server and self.hook_server.is_running:

@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import urllib.parse
+import time
 from typing import Optional, Callable, Awaitable
 
 logger = logging.getLogger(__name__)
@@ -17,19 +18,35 @@ class HookServer:
 
     Claude Code sends HTTP POST to these endpoints when hooks fire.
     We parse the ?task_id=xxx query param to route to the right task.
+
+    Includes a heartbeat monitor: if the daemon stops sending heartbeats
+    for longer than heartbeat_timeout seconds, hooks are automatically removed
+    from settings.json so Claude Code is not blocked by stale hooks.
     """
 
-    def __init__(self, host: str = "127.0.0.1", port: int = 3456):
+    def __init__(
+        self,
+        host: str = "127.0.0.1",
+        port: int = 3456,
+        heartbeat_timeout: float = 60.0,
+    ):
         self.host = host
         self.port = port
+        self.heartbeat_timeout = heartbeat_timeout
         self._server: Optional[asyncio.Server] = None
         self._running = False
+        self._monitor_task: Optional[asyncio.Task] = None
 
         # Callbacks registered by the daemon
         self._on_stop: Optional[HookCallback] = None
         self._on_post_tool_use: Optional[HookCallback] = None
         self._on_pre_tool_use: Optional[HookCallback] = None
         self._on_notification: Optional[HookCallback] = None
+        self._on_heartbeat: Optional[Callable[[], None]] = None
+
+        # Heartbeat tracking
+        self._last_heartbeat: float = time.monotonic()
+        self._daemon_alive: bool = True
 
     # -------------------------------------------------------------------------
     # Public API
@@ -51,8 +68,12 @@ class HookServer:
         """Register callback for Notification hook events."""
         self._on_notification = cb
 
+    def register_heartbeat_handler(self, cb: Callable[[], None]):
+        """Register callback for daemon heartbeat ticks."""
+        self._on_heartbeat = cb
+
     async def start(self):
-        """Start the HTTP server."""
+        """Start the HTTP server and heartbeat monitor."""
         if self._running:
             logger.warning("Hook server already running")
             return
@@ -67,14 +88,58 @@ class HookServer:
         addr = self._server.sockets[0].getsockname()
         logger.info(f"Hook server listening on {addr[0]}:{addr[1]}")
 
+        # Start heartbeat monitor
+        self._last_heartbeat = time.monotonic()
+        self._daemon_alive = True
+        self._monitor_task = asyncio.create_task(self._heartbeat_monitor())
+
     async def stop(self):
-        """Stop the HTTP server."""
+        """Stop the HTTP server and cancel the heartbeat monitor."""
         if not self._running:
             return
+        if self._monitor_task:
+            self._monitor_task.cancel()
+            try:
+                await self._monitor_task
+            except asyncio.CancelledError:
+                pass
+            self._monitor_task = None
         self._server.close()
         await self._server.wait_closed()
         self._running = False
         logger.info("Hook server stopped")
+
+    async def _heartbeat_monitor(self):
+        """Periodically check if the daemon is still sending heartbeats.
+
+        If no heartbeat is received for longer than heartbeat_timeout seconds,
+        the daemon is considered dead and hooks are removed from settings.json.
+        """
+        from .hook_config import remove_hooks
+        while True:
+            try:
+                await asyncio.sleep(10)
+            except asyncio.CancelledError:
+                break
+
+            elapsed = time.monotonic() - self._last_heartbeat
+            if elapsed > self.heartbeat_timeout:
+                if self._daemon_alive:
+                    logger.warning(
+                        f"No heartbeat from daemon for {elapsed:.0f}s (timeout={self.heartbeat_timeout}s). "
+                        "Daemon appears dead — removing hooks from settings.json."
+                    )
+                    self._daemon_alive = False
+                    try:
+                        remove_hooks()
+                    except Exception as e:
+                        logger.error(f"Failed to remove hooks on heartbeat timeout: {e}")
+                # Keep checking; daemon might reconnect on restart
+
+    def _record_heartbeat(self):
+        """Record that the daemon is alive."""
+        self._last_heartbeat = time.monotonic()
+        self._daemon_alive = True
 
     @property
     def is_running(self) -> bool:
@@ -143,6 +208,9 @@ class HookServer:
         body: bytes,
     ):
         """Dispatch request to the appropriate hook handler."""
+        # Refresh heartbeat on any incoming request from the daemon
+        self._record_heartbeat()
+
         logger.info(f"Hook received: {method} {path} task_id={task_id}")
 
         # Parse JSON body
@@ -180,7 +248,15 @@ class HookServer:
             response_data = {"continue": True}
 
         elif path == "/health":
+            self._record_heartbeat()
             await self._write_response(writer, 200, json.dumps({"status": "ok"}), content_type="application/json")
+            return
+
+        elif path == "/hooks/heartbeat":
+            self._record_heartbeat()
+            if self._on_heartbeat:
+                self._on_heartbeat()
+            await self._write_response(writer, 200, json.dumps({"alive": True}), content_type="application/json")
             return
 
         else:
