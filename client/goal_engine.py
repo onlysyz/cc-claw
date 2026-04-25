@@ -100,9 +100,18 @@ Output the tasks as a JSON object with a "tasks" array."""
         if not response:
             return []
 
+        # Strip markdown code blocks if present
+        cleaned = response.strip()
+        if cleaned.startswith("```"):
+            lines = cleaned.split("\n")
+            if len(lines) >= 2:
+                if lines[-1].strip() == "```":
+                    lines = lines[:-1]
+                cleaned = "\n".join(lines[1:])
+
         try:
             # Try to find JSON object with tasks array
-            data = json.loads(response)
+            data = json.loads(cleaned)
             if isinstance(data, dict) and "tasks" in data:
                 tasks = data["tasks"]
                 if isinstance(tasks, list) and all(isinstance(t, str) for t in tasks):
